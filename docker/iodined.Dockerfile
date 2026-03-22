@@ -15,7 +15,9 @@ COPY src /work/src
 COPY man /work/man
 COPY README.md LICENSE CHANGELOG /work/
 
-RUN make TARGETOS=linux all
+RUN sed -i 's/\r$//' /work/src/osflags
+
+RUN make TARGETOS=Linux all
 
 FROM scratch AS export
 
