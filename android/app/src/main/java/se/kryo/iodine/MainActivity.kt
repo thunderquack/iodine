@@ -9,11 +9,13 @@ import java.io.File
 
 class MainActivity : AppCompatActivity() {
     private lateinit var statusView: TextView
-    private lateinit var commandView: EditText
+    private lateinit var serverView: EditText
+    private lateinit var domainView: EditText
+    private lateinit var passwordView: EditText
+    private lateinit var optionsView: EditText
     private lateinit var logView: TextView
-    private lateinit var prepareButton: Button
-    private lateinit var startButton: Button
-    private lateinit var stopButton: Button
+    private lateinit var connectButton: Button
+    private lateinit var disconnectButton: Button
 
     private var preparedBinary: File? = null
     private var runningProcess: Process? = null
@@ -25,47 +27,26 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         statusView = findViewById(R.id.statusText)
-        commandView = findViewById(R.id.commandInput)
+        serverView = findViewById(R.id.serverInput)
+        domainView = findViewById(R.id.domainInput)
+        passwordView = findViewById(R.id.passwordInput)
+        optionsView = findViewById(R.id.optionsInput)
         logView = findViewById(R.id.logText)
-        prepareButton = findViewById(R.id.prepareButton)
-        startButton = findViewById(R.id.startButton)
-        stopButton = findViewById(R.id.stopButton)
+        connectButton = findViewById(R.id.connectButton)
+        disconnectButton = findViewById(R.id.disconnectButton)
 
-        commandView.setText("-f")
+        optionsView.setText("-f")
         status("Idle. Root and TUN support are still required on the device.")
         appendLog("APK contains the iodine client binary in app assets.")
+        appendLog("Fill in the server and delegated domain, then tap Connect.")
 
-        prepareButton.setOnClickListener { prepareBinary() }
-        startButton.setOnClickListener { startIodine() }
-        stopButton.setOnClickListener { stopIodine() }
+        connectButton.setOnClickListener { startIodine() }
+        disconnectButton.setOnClickListener { stopIodine() }
     }
 
     override fun onDestroy() {
         stopIodine()
         super.onDestroy()
-    }
-
-    private fun prepareBinary() {
-        if (runningProcess != null) {
-            appendLog("Stop the running process before re-preparing the binary.")
-            return
-        }
-
-        runInBackground {
-            try {
-                val binary = IodineBinary.prepare(this)
-                preparedBinary = binary
-                runOnUiThread {
-                    status("Prepared ${binary.name} for ${IodineBinary.selectedAbi()}.")
-                    appendLog("Prepared binary at ${binary.absolutePath}")
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    status("Prepare failed.")
-                    appendLog("Prepare failed: ${e.message}")
-                }
-            }
-        }
     }
 
     private fun startIodine() {
@@ -74,10 +55,17 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        val domain = domainView.text.toString().trim()
+        if (domain.isBlank()) {
+            status("Missing domain.")
+            appendLog("Enter the delegated iodine domain before connecting.")
+            return
+        }
+
         runInBackground {
             try {
                 val binary = preparedBinary ?: IodineBinary.prepare(this).also { preparedBinary = it }
-                val args = commandView.text.toString().trim()
+                val args = buildCommandArgs()
                 stopping = false
 
                 runOnUiThread {
@@ -129,8 +117,35 @@ class MainActivity : AppCompatActivity() {
     private fun stopIodine() {
         val process = runningProcess ?: return
         stopping = true
+        status("Disconnecting.")
         appendLog("Stopping iodine process.")
         process.destroy()
+    }
+
+    private fun buildCommandArgs(): String {
+        val parts = mutableListOf<String>()
+        val options = optionsView.text.toString().trim()
+        val server = serverView.text.toString().trim()
+        val domain = domainView.text.toString().trim()
+        val password = passwordView.text.toString()
+
+        if (options.isNotBlank()) {
+            parts += options
+        }
+        if (password.isNotBlank()) {
+            parts += "-P"
+            parts += shellQuote(password)
+        }
+        if (server.isNotBlank()) {
+            parts += shellQuote(server)
+        }
+        parts += shellQuote(domain)
+
+        return parts.joinToString(" ")
+    }
+
+    private fun shellQuote(value: String): String {
+        return "'${value.replace("'", "'\\''")}'"
     }
 
     private fun runInBackground(block: () -> Unit) {
