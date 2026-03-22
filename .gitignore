@@ -6,3 +6,4 @@
 *.o.d
 /src/obj/local/*/iodine
 /src/libs/*/iodine
+dist/android-apk/out
