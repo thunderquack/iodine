@@ -52,6 +52,9 @@
 #include "tun.h"
 #include "version.h"
 #include "client.h"
+#ifdef ANDROID
+#include "android_vpn.h"
+#endif
 
 static void handshake_lazyoff(int dns_fd);
 
@@ -1125,8 +1128,12 @@ client_tunnel(int tun_fd, int dns_fd)
 		if (running == 0)
 			break;
 
-		if (i < 0)
-			err(1, "select");
+		if (i < 0) {
+			if (!running)
+				break;
+			warn("select");
+			break;
+		}
 
 		if (i == 0) {
 			/* timeout */
@@ -1405,6 +1412,13 @@ handshake_login(int dns_fd, int seed)
 
 				server[64] = 0;
 				client[64] = 0;
+#ifdef ANDROID
+				if (android_vpn_is_enabled()) {
+					android_vpn_store_config(client, server, netmask, mtu);
+					fprintf(stderr, "Server tunnel IP is %s\n", server);
+					return 0;
+				}
+#endif
 				if (tun_setip(client, server, netmask) == 0 &&
 					tun_setmtu(mtu) == 0) {
 

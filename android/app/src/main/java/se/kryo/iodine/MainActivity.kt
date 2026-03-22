@@ -1,11 +1,18 @@
 package se.kryo.iodine
 
+import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import java.io.File
 
 class MainActivity : AppCompatActivity() {
     private lateinit var statusView: TextView
@@ -17,10 +24,30 @@ class MainActivity : AppCompatActivity() {
     private lateinit var connectButton: Button
     private lateinit var disconnectButton: Button
 
-    private var preparedBinary: File? = null
-    private var runningProcess: Process? = null
-    @Volatile
-    private var stopping = false
+    private val vpnPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            startVpnService()
+        } else {
+            status("VPN permission denied.")
+            appendLog("Android did not grant VPN permission.")
+        }
+    }
+
+    private val statusReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val status = intent.getStringExtra(IodineVpnService.EXTRA_STATUS)
+            val logLine = intent.getStringExtra(IodineVpnService.EXTRA_LOG)
+
+            if (!status.isNullOrBlank()) {
+                status(status)
+            }
+            if (!logLine.isNullOrBlank()) {
+                appendLog(logLine)
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,25 +63,28 @@ class MainActivity : AppCompatActivity() {
         disconnectButton = findViewById(R.id.disconnectButton)
 
         optionsView.setText("-f")
-        status("Idle. Root and TUN support are still required on the device.")
-        appendLog("APK contains the iodine client binary in app assets.")
-        appendLog("Fill in the server and delegated domain, then tap Connect.")
+        status("Idle.")
+        appendLog("Connect uses Android VpnService, not root.")
+        appendLog("Server is optional. If blank, the app tries the active network's DNS resolver.")
 
-        connectButton.setOnClickListener { startIodine() }
-        disconnectButton.setOnClickListener { stopIodine() }
+        val filter = IntentFilter(IodineVpnService.ACTION_STATUS)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(statusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(statusReceiver, filter)
+        }
+
+        connectButton.setOnClickListener { connect() }
+        disconnectButton.setOnClickListener { disconnect() }
     }
 
     override fun onDestroy() {
-        stopIodine()
+        unregisterReceiver(statusReceiver)
         super.onDestroy()
     }
 
-    private fun startIodine() {
-        if (runningProcess != null) {
-            appendLog("The iodine client is already running.")
-            return
-        }
-
+    private fun connect() {
         val domain = domainView.text.toString().trim()
         if (domain.isBlank()) {
             status("Missing domain.")
@@ -62,94 +92,30 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        runInBackground {
-            try {
-                val binary = preparedBinary ?: IodineBinary.prepare(this).also { preparedBinary = it }
-                val args = buildCommandArgs()
-                stopping = false
-
-                runOnUiThread {
-                    status("Launching iodine via su.")
-                    appendLog("Command: ${binary.absolutePath}${if (args.isBlank()) "" else " $args"}")
-                }
-
-                val process = ShellRunner.start(binary, args)
-                runningProcess = process
-
-                val stdout = Thread {
-                    process.inputStream.bufferedReader().useLines { lines ->
-                        lines.forEach { appendLogFromWorker(it) }
-                    }
-                }
-                val stderr = Thread {
-                    process.errorStream.bufferedReader().useLines { lines ->
-                        lines.forEach { appendLogFromWorker(it) }
-                    }
-                }
-
-                stdout.start()
-                stderr.start()
-
-                val exitCode = process.waitFor()
-                stdout.join()
-                stderr.join()
-                runningProcess = null
-
-                runOnUiThread {
-                    if (stopping) {
-                        status("Stopped.")
-                        appendLog("iodine process terminated by app request.")
-                    } else {
-                        status("Exited with code $exitCode.")
-                        appendLog("iodine process exited with code $exitCode.")
-                    }
-                }
-            } catch (e: Exception) {
-                runningProcess = null
-                runOnUiThread {
-                    status("Launch failed.")
-                    appendLog("Launch failed: ${e.message}")
-                }
-            }
+        val prepareIntent = VpnService.prepare(this)
+        if (prepareIntent != null) {
+            vpnPermissionLauncher.launch(prepareIntent)
+        } else {
+            startVpnService()
         }
     }
 
-    private fun stopIodine() {
-        val process = runningProcess ?: return
-        stopping = true
-        status("Disconnecting.")
-        appendLog("Stopping iodine process.")
-        process.destroy()
+    private fun startVpnService() {
+        val intent = Intent(this, IodineVpnService::class.java).apply {
+            action = IodineVpnService.ACTION_CONNECT
+            putExtra(IodineVpnService.EXTRA_SERVER, serverView.text.toString().trim())
+            putExtra(IodineVpnService.EXTRA_DOMAIN, domainView.text.toString().trim())
+            putExtra(IodineVpnService.EXTRA_PASSWORD, passwordView.text.toString())
+            putExtra(IodineVpnService.EXTRA_OPTIONS, optionsView.text.toString().trim())
+        }
+        startService(intent)
     }
 
-    private fun buildCommandArgs(): String {
-        val parts = mutableListOf<String>()
-        val options = optionsView.text.toString().trim()
-        val server = serverView.text.toString().trim()
-        val domain = domainView.text.toString().trim()
-        val password = passwordView.text.toString()
-
-        if (options.isNotBlank()) {
-            parts += options
+    private fun disconnect() {
+        val intent = Intent(this, IodineVpnService::class.java).apply {
+            action = IodineVpnService.ACTION_DISCONNECT
         }
-        if (password.isNotBlank()) {
-            parts += "-P"
-            parts += shellQuote(password)
-        }
-        if (server.isNotBlank()) {
-            parts += shellQuote(server)
-        }
-        parts += shellQuote(domain)
-
-        return parts.joinToString(" ")
-    }
-
-    private fun shellQuote(value: String): String {
-        return "'${value.replace("'", "'\\''")}'"
-    }
-
-    private fun runInBackground(block: () -> Unit) {
-        Thread(block).start()
+        startService(intent)
     }
 
     private fun status(message: String) {
@@ -159,9 +125,5 @@ class MainActivity : AppCompatActivity() {
     private fun appendLog(message: String) {
         val current = logView.text.toString()
         logView.text = if (current.isEmpty()) message else "$current\n$message"
-    }
-
-    private fun appendLogFromWorker(message: String) {
-        runOnUiThread { appendLog(message) }
     }
 }

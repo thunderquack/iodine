@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">Iodine</string>
     <string name="status_idle">Idle</string>
-    <string name="server_hint">Server or resolver, for example: 8.8.8.8</string>
+    <string name="server_hint">Server or resolver, optional, for example: 8.8.8.8</string>
     <string name="domain_hint">Delegated domain, for example: t1.example.com</string>
     <string name="password_hint">Password</string>
     <string name="options_hint">Extra options, for example: -f -r</string>

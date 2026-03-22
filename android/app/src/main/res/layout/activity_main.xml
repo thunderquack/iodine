@@ -31,13 +31,6 @@
             android:inputType="textUri|textNoSuggestions"
             android:textColorHint="@color/color_muted" />
 
-        <Button
-            android:id="@+id/connectButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="@string/connect" />
-
         <EditText
             android:id="@+id/domainInput"
             android:layout_width="match_parent"
@@ -65,6 +58,13 @@
             android:inputType="textMultiLine|textNoSuggestions"
             android:minLines="2"
             android:textColorHint="@color/color_muted" />
+
+        <Button
+            android:id="@+id/connectButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/connect" />
 
         <Button
             android:id="@+id/disconnectButton"
