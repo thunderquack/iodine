@@ -41,6 +41,8 @@ COPY src /work/src
 COPY scripts /work/scripts
 COPY android /work/android
 
+RUN sed -i 's/\r$//' /work/scripts/build-android-native.sh /work/scripts/build-android-apk.sh /work/src/osflags
+
 RUN chmod +x scripts/build-android-native.sh scripts/build-android-apk.sh
 RUN mkdir -p /out && APK_OUT_DIR=/out scripts/build-android-apk.sh
 
