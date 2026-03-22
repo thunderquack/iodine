@@ -1,4 +1,4 @@
-FROM eclipse-temurin:17-jdk
+FROM eclipse-temurin:17-jdk AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV ANDROID_SDK_ROOT=/opt/android-sdk
@@ -29,6 +29,8 @@ WORKDIR /work
 COPY . /work
 
 RUN chmod +x scripts/build-android-native.sh scripts/build-android-apk.sh
-RUN scripts/build-android-apk.sh
+RUN mkdir -p /out && APK_OUT_DIR=/out scripts/build-android-apk.sh
 
-CMD ["bash", "-lc", "ls -lah android/app/build/outputs/apk/debug/ && echo APK: /work/android/app/build/outputs/apk/debug/app-debug.apk"]
+FROM scratch AS export
+
+COPY --from=builder /out/ /out/

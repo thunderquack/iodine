@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="$ROOT_DIR/android"
 ASSETS_DIR="$ANDROID_DIR/app/src/main/assets/bin"
+APK_RELATIVE_PATH="app/build/outputs/apk/debug/app-debug.apk"
+APK_OUT_DIR="${APK_OUT_DIR:-}"
 
 "$ROOT_DIR/scripts/build-android-native.sh"
 
@@ -16,3 +18,8 @@ chmod 0644 "$ASSETS_DIR/arm64-v8a/iodine" "$ASSETS_DIR/armeabi-v7a/iodine"
 
 cd "$ANDROID_DIR"
 gradle --no-daemon assembleDebug
+
+if [[ -n "$APK_OUT_DIR" ]]; then
+  mkdir -p "$APK_OUT_DIR"
+  cp "$ANDROID_DIR/$APK_RELATIVE_PATH" "$APK_OUT_DIR/app-debug.apk"
+fi
