@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Iodine</string>
+    <string name="status_idle">Idle</string>
+    <string name="command_hint">iodine arguments, for example: -f -r 8.8.8.8 t1.example.com</string>
+    <string name="prepare_binary">Prepare Binary</string>
+    <string name="start_iodine">Start Iodine</string>
+    <string name="stop_iodine">Stop Iodine</string>
+    <string name="log_title">Process Log</string>
 </resources>
