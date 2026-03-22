@@ -4,11 +4,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <netdb.h>
 #include <android/log.h>
 
 #include "android_vpn.h"
-#include "client.h"
 #include "common.h"
+#include "client.h"
 
 #define LOG_TAG "iodine-android"
 
