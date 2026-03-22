@@ -16,10 +16,4 @@ rm -rf libs obj
   NDK_PROJECT_PATH=. \
   APP_BUILD_SCRIPT=Android.16.mk \
   APP_PLATFORM=android-16 \
-  TARGET_ARCH_ABI=arm64-v8a
-
-"$ANDROID_NDK_ROOT/ndk-build" \
-  NDK_PROJECT_PATH=. \
-  APP_BUILD_SCRIPT=Android.16.mk \
-  APP_PLATFORM=android-16 \
-  TARGET_ARCH_ABI=armeabi-v7a
+  APP_ABI="arm64-v8a armeabi-v7a"
