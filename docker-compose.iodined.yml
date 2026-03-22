@@ -1,0 +1,21 @@
+services:
+  iodined:
+    build:
+      context: .
+      dockerfile: docker/iodined.Dockerfile
+    image: iodine-server:latest
+    container_name: iodined
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "53:53/udp"
+    environment:
+      IODINED_TUNNEL_IP: "10.0.0.1"
+      IODINED_TOPDOMAIN: "t1.example.com"
+      IODINED_PASSWORD: "change-me"
+      IODINED_EXTRA_ARGS: "-c"
+    stdin_open: true
+    tty: true
