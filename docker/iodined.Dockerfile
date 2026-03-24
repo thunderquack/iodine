@@ -40,7 +40,8 @@ WORKDIR /app
 COPY --from=builder /work/bin/iodined /usr/local/sbin/iodined
 COPY docker/iodined-entrypoint.sh /usr/local/bin/iodined-entrypoint.sh
 
-RUN chmod +x /usr/local/bin/iodined-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/iodined-entrypoint.sh \
+    && chmod +x /usr/local/bin/iodined-entrypoint.sh
 
 EXPOSE 53/udp
 
