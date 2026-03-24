@@ -16,8 +16,7 @@ services:
       IODINED_TUNNEL_IP: "10.0.0.1"
       IODINED_TOPDOMAIN: "t1.example.com"
       IODINED_PASSWORD: "change-me"
-      IODINED_LISTEN_IPV4: "0.0.0.0"
       IODINED_EXTERNAL_NS_IP: "1.1.1.1"
-      IODINED_EXTRA_ARGS: "-c"
+      IODINED_EXTRA_ARGS: "-c -4"
     stdin_open: true
     tty: true
