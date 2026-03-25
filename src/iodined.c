@@ -137,6 +137,42 @@ debug_log_stderr(const char *fmt, ...)
 	va_end(ap);
 }
 
+static const char *
+qtype_name(unsigned short type)
+{
+	static char unknown[16];
+
+	switch (type) {
+	case T_A:
+		return "A";
+	case T_NS:
+		return "NS";
+	case T_CNAME:
+		return "CNAME";
+	case T_SOA:
+		return "SOA";
+	case T_PTR:
+		return "PTR";
+	case T_MX:
+		return "MX";
+	case T_TXT:
+		return "TXT";
+	case T_AAAA:
+		return "AAAA";
+	case T_SRV:
+		return "SRV";
+	case T_NULL:
+		return "NULL";
+	case T_ANY:
+		return "ANY";
+	case T_PRIVATE:
+		return "PRIVATE";
+	default:
+		snprintf(unknown, sizeof(unknown), "TYPE%u", type);
+		return unknown;
+	}
+}
+
 static int
 get_dns_fd(struct dnsfd *fds, struct sockaddr_storage *addr)
 {
@@ -1570,8 +1606,8 @@ handle_ns_request(int dns_fd, struct query *q, int topdomain_offset)
 	}
 
 	if (debug >= 2) {
-		debug_log_stderr("TX: client %s, type %d, name %s, %d bytes NS reply\n",
-			format_addr(&q->from, q->fromlen), q->type, q->name, len);
+		debug_log_stderr("TX: client %s, type %s, name %s, %d bytes NS reply\n",
+			format_addr(&q->from, q->fromlen), qtype_name(q->type), q->name, len);
 	}
 	if (sendto(dns_fd, buf, len, 0, (struct sockaddr*)&q->from, q->fromlen) <= 0) {
 		warn("ns reply send error");
@@ -1612,8 +1648,8 @@ handle_a_request(int dns_fd, struct query *q, int fakeip)
 	}
 
 	if (debug >= 2) {
-		debug_log_stderr("TX: client %s, type %d, name %s, %d bytes A reply\n",
-			format_addr(&q->from, q->fromlen), q->type, q->name, len);
+		debug_log_stderr("TX: client %s, type %s, name %s, %d bytes A reply\n",
+			format_addr(&q->from, q->fromlen), qtype_name(q->type), q->name, len);
 	}
 	if (sendto(dns_fd, buf, len, 0, (struct sockaddr*)&q->from, q->fromlen) <= 0) {
 		warn("a reply send error");
@@ -1633,8 +1669,8 @@ handle_underscore_request(int dns_fd, struct query *q, const char *topdomain)
 	}
 
 	if (debug >= 2) {
-		debug_log_stderr("TX: client %s, type %d, name %s, %d bytes NXDOMAIN reply\n",
-			format_addr(&q->from, q->fromlen), q->type, q->name, len);
+		debug_log_stderr("TX: client %s, type %s, name %s, %d bytes NXDOMAIN reply\n",
+			format_addr(&q->from, q->fromlen), qtype_name(q->type), q->name, len);
 	}
 	if (sendto(dns_fd, buf, len, 0, (struct sockaddr*)&q->from, q->fromlen) <= 0) {
 		warn("nxdomain reply send error");
@@ -1734,8 +1770,8 @@ tunnel_dns(int tun_fd, int dns_fd, struct dnsfd *dns_fds, int bind_fd)
 		return 0;
 
 	if (debug >= 2) {
-		debug_log_stderr("RX: client %s, type %d, name %s\n",
-			format_addr(&q.from, q.fromlen), q.type, q.name);
+		debug_log_stderr("RX: client %s, type %s, name %s\n",
+			format_addr(&q.from, q.fromlen), qtype_name(q.type), q.name);
 	}
 
 	domain_len = query_datalen(q.name, topdomain);
@@ -2320,8 +2356,8 @@ write_dns(int fd, struct query *q, const char *data, int datalen, char downenc)
 	}
 
 	if (debug >= 2) {
-		debug_log_stderr("TX: client %s, type %d, name %s, %d bytes data\n",
-			format_addr(&q->from, q->fromlen), q->type, q->name, datalen);
+		debug_log_stderr("TX: client %s, type %s, name %s, %d bytes data\n",
+			format_addr(&q->from, q->fromlen), qtype_name(q->type), q->name, datalen);
 	}
 
 	sendto(fd, buf, len, 0, (struct sockaddr*)&q->from, q->fromlen);
