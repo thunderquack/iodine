@@ -13,7 +13,9 @@
     <string name="options_hint">Extra options, for example: -f -r</string>
     <string name="connect">Connect</string>
     <string name="disconnect">Disconnect</string>
-    <string name="collect_settings">Collect&#10;Settings</string>
-    <string name="clear_log">Clear&#10;Log</string>
+    <string name="collect_settings">Collect
+Settings</string>
+    <string name="clear_log">Clear
+Log</string>
     <string name="log_title">Process Log</string>
 </resources>

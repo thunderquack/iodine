@@ -144,16 +144,18 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
+            android:gravity="center_vertical"
             android:orientation="horizontal">
 
             <Button
                 android:id="@+id/collectNetworkButton"
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
+                android:layout_height="72dp"
                 android:layout_weight="1"
                 android:gravity="center"
+                android:maxLines="2"
                 android:lines="2"
-                android:minHeight="72dp"
+                android:singleLine="false"
                 android:text="@string/collect_settings" />
 
             <Space
@@ -163,11 +165,12 @@
             <Button
                 android:id="@+id/clearLogButton"
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
+                android:layout_height="72dp"
                 android:layout_weight="1"
                 android:gravity="center"
+                android:maxLines="2"
                 android:lines="2"
-                android:minHeight="72dp"
+                android:singleLine="false"
                 android:text="@string/clear_log" />
         </LinearLayout>
 
