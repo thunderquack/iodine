@@ -13,6 +13,8 @@ import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.widget.ArrayAdapter
+import android.widget.AutoCompleteTextView
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -24,9 +26,15 @@ import java.util.Collections
 
 class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+    private val resolverSuggestions = listOf(
+        "195.208.4.1",
+        "195.208.5.1",
+        "77.88.8.8",
+        "77.88.8.1"
+    )
 
     private lateinit var statusView: TextView
-    private lateinit var serverView: EditText
+    private lateinit var serverView: AutoCompleteTextView
     private lateinit var domainView: EditText
     private lateinit var passwordView: EditText
     private lateinit var optionsView: EditText
@@ -75,6 +83,15 @@ class MainActivity : AppCompatActivity() {
         disconnectButton = findViewById(R.id.disconnectButton)
         collectNetworkButton = findViewById(R.id.collectNetworkButton)
         clearLogButton = findViewById(R.id.clearLogButton)
+
+        serverView.setAdapter(
+            ArrayAdapter(
+                this,
+                android.R.layout.simple_dropdown_item_1line,
+                resolverSuggestions
+            )
+        )
+        serverView.threshold = 0
 
         restoreInputs()
         status("Idle.")
