@@ -16,6 +16,7 @@
  */
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -113,6 +114,28 @@ struct dnsfd {
 static int read_dns(int fd, struct dnsfd *dns_fds, int tun_fd, struct query *q);
 static void write_dns(int fd, struct query *q, const char *data, int datalen, char downenc);
 static void handle_full_packet(int tun_fd, struct dnsfd *dns_fds, int userid);
+
+static void
+debug_log_stderr(const char *fmt, ...)
+{
+	char timestamp[20];
+	time_t now;
+	struct tm tm_now;
+	va_list ap;
+
+	now = time(NULL);
+#ifdef WINDOWS32
+	gmtime_s(&tm_now, &now);
+#else
+	gmtime_r(&now, &tm_now);
+#endif
+	strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &tm_now);
+
+	fprintf(stderr, "%s ", timestamp);
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+}
 
 static int
 get_dns_fd(struct dnsfd *fds, struct sockaddr_storage *addr)
@@ -1547,7 +1570,7 @@ handle_ns_request(int dns_fd, struct query *q, int topdomain_offset)
 	}
 
 	if (debug >= 2) {
-		fprintf(stderr, "TX: client %s, type %d, name %s, %d bytes NS reply\n",
+		debug_log_stderr("TX: client %s, type %d, name %s, %d bytes NS reply\n",
 			format_addr(&q->from, q->fromlen), q->type, q->name, len);
 	}
 	if (sendto(dns_fd, buf, len, 0, (struct sockaddr*)&q->from, q->fromlen) <= 0) {
@@ -1589,7 +1612,7 @@ handle_a_request(int dns_fd, struct query *q, int fakeip)
 	}
 
 	if (debug >= 2) {
-		fprintf(stderr, "TX: client %s, type %d, name %s, %d bytes A reply\n",
+		debug_log_stderr("TX: client %s, type %d, name %s, %d bytes A reply\n",
 			format_addr(&q->from, q->fromlen), q->type, q->name, len);
 	}
 	if (sendto(dns_fd, buf, len, 0, (struct sockaddr*)&q->from, q->fromlen) <= 0) {
@@ -1610,7 +1633,7 @@ handle_underscore_request(int dns_fd, struct query *q, const char *topdomain)
 	}
 
 	if (debug >= 2) {
-		fprintf(stderr, "TX: client %s, type %d, name %s, %d bytes NXDOMAIN reply\n",
+		debug_log_stderr("TX: client %s, type %d, name %s, %d bytes NXDOMAIN reply\n",
 			format_addr(&q->from, q->fromlen), q->type, q->name, len);
 	}
 	if (sendto(dns_fd, buf, len, 0, (struct sockaddr*)&q->from, q->fromlen) <= 0) {
@@ -1645,7 +1668,7 @@ forward_query(int bind_fd, struct query *q)
 	myaddr->sin_port = htons(bind_port);
 
 	if (debug >= 2) {
-		fprintf(stderr, "TX: NS reply \n");
+		debug_log_stderr("TX: NS reply \n");
 	}
 
 	if (sendto(bind_fd, buf, len, 0, (struct sockaddr*)&q->from, q->fromlen) <= 0) {
@@ -1674,7 +1697,7 @@ tunnel_bind(int bind_fd, struct dnsfd *dns_fds)
 	id = dns_get_id(packet, r);
 
 	if (debug >= 2) {
-		fprintf(stderr, "RX: Got response on query %u from DNS\n", (id & 0xFFFF));
+		debug_log_stderr("RX: Got response on query %u from DNS\n", (id & 0xFFFF));
 	}
 
 	/* Get sockaddr from id */
@@ -1687,7 +1710,7 @@ tunnel_bind(int bind_fd, struct dnsfd *dns_fds)
 	}
 
 	if (debug >= 2) {
-		fprintf(stderr, "TX: client %s id %u, %d bytes\n",
+		debug_log_stderr("TX: client %s id %u, %d bytes\n",
 			format_addr(&query->addr, query->addrlen), (id & 0xffff), r);
 	}
 
@@ -1711,7 +1734,7 @@ tunnel_dns(int tun_fd, int dns_fd, struct dnsfd *dns_fds, int bind_fd)
 		return 0;
 
 	if (debug >= 2) {
-		fprintf(stderr, "RX: client %s, type %d, name %s\n",
+		debug_log_stderr("RX: client %s, type %d, name %s\n",
 			format_addr(&q.from, q.fromlen), q.type, q.name);
 	}
 
@@ -2297,7 +2320,7 @@ write_dns(int fd, struct query *q, const char *data, int datalen, char downenc)
 	}
 
 	if (debug >= 2) {
-		fprintf(stderr, "TX: client %s, type %d, name %s, %d bytes data\n",
+		debug_log_stderr("TX: client %s, type %d, name %s, %d bytes data\n",
 			format_addr(&q->from, q->fromlen), q->type, q->name, datalen);
 	}
 
