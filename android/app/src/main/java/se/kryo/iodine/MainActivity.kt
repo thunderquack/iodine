@@ -92,6 +92,12 @@ class MainActivity : AppCompatActivity() {
             )
         )
         serverView.threshold = 0
+        serverView.setOnClickListener { serverView.showDropDown() }
+        serverView.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                serverView.showDropDown()
+            }
+        }
 
         restoreInputs()
         status("Idle.")
