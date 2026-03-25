@@ -289,7 +289,7 @@ static void send_raw(int fd, char *buf, int buflen, int user, int cmd, struct qu
 	packet[RAW_HDR_CMD] = cmd | (user & 0x0F);
 
 	if (debug >= 2) {
-		fprintf(stderr, "TX-raw: client %s, cmd %d, %d bytes\n",
+		debug_log_stderr("TX-raw: client %s, cmd %d, %d bytes\n",
 			format_addr(&q->from, q->fromlen), cmd, len);
 	}
 
@@ -1962,10 +1962,10 @@ handle_full_packet(int tun_fd, struct dnsfd *dns_fds, int userid)
 					 RAW_HDR_CMD_DATA, &users[touser].q);
 			}
 		}
-	} else {
-		if (debug >= 1)
-			fprintf(stderr, "Discarded data, uncompress() result: %d\n", ret);
-	}
+		} else {
+			if (debug >= 1)
+				debug_log_stderr("Discarded data, uncompress() result: %d\n", ret);
+		}
 
 	/* This packet is done */
 	users[userid].inpacket.len = 0;
@@ -1987,7 +1987,7 @@ handle_raw_login(char *packet, int len, struct query *q, int fd, int userid)
 	if (users[userid].last_pkt + 60 < time(NULL)) return;
 
 	if (debug >= 1) {
-		fprintf(stderr, "IN   login raw, len %d, from user %d\n",
+		debug_log_stderr("IN   login raw, len %d, from user %d\n",
 			len, userid);
 	}
 
@@ -2029,7 +2029,7 @@ handle_raw_data(char *packet, int len, struct query *q, struct dnsfd *dns_fds, i
 	users[userid].inpacket.len = len;
 
 	if (debug >= 1) {
-		fprintf(stderr, "IN   pkt raw, total %d, from user %d\n",
+		debug_log_stderr("IN   pkt raw, total %d, from user %d\n",
 			users[userid].inpacket.len, userid);
 	}
 
@@ -2049,7 +2049,7 @@ handle_raw_ping(struct query *q, int dns_fd, int userid)
 	memcpy(&(users[userid].q), q, sizeof(struct query));
 
 	if (debug >= 1) {
-		fprintf(stderr, "IN   ping raw, from user %d\n", userid);
+		debug_log_stderr("IN   ping raw, from user %d\n", userid);
 	}
 
 	/* Send ping reply */
