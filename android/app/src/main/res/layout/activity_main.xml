@@ -150,6 +150,9 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
+                android:gravity="center"
+                android:lines="2"
+                android:minHeight="72dp"
                 android:text="@string/collect_settings" />
 
             <Space
@@ -161,6 +164,9 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
+                android:gravity="center"
+                android:lines="2"
+                android:minHeight="72dp"
                 android:text="@string/clear_log" />
         </LinearLayout>
 
