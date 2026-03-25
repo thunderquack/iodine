@@ -3,19 +3,19 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="$ROOT_DIR/android"
-ASSETS_DIR="$ANDROID_DIR/app/src/main/assets/bin"
+JNI_LIBS_DIR="$ANDROID_DIR/app/src/main/jniLibs"
 APK_RELATIVE_PATH="app/build/outputs/apk/debug/app-debug.apk"
 APK_OUT_DIR="${APK_OUT_DIR:-}"
 ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-}"
 
 "$ROOT_DIR/scripts/build-android-native.sh"
 
-mkdir -p "$ASSETS_DIR/arm64-v8a" "$ASSETS_DIR/armeabi-v7a"
+mkdir -p "$JNI_LIBS_DIR/arm64-v8a" "$JNI_LIBS_DIR/armeabi-v7a"
 
-cp "$ROOT_DIR/src/libs/arm64-v8a/iodine" "$ASSETS_DIR/arm64-v8a/iodine"
-cp "$ROOT_DIR/src/libs/armeabi-v7a/iodine" "$ASSETS_DIR/armeabi-v7a/iodine"
+cp "$ROOT_DIR/src/libs/arm64-v8a/libiodine_android.so" "$JNI_LIBS_DIR/arm64-v8a/libiodine_android.so"
+cp "$ROOT_DIR/src/libs/armeabi-v7a/libiodine_android.so" "$JNI_LIBS_DIR/armeabi-v7a/libiodine_android.so"
 
-chmod 0644 "$ASSETS_DIR/arm64-v8a/iodine" "$ASSETS_DIR/armeabi-v7a/iodine"
+chmod 0644 "$JNI_LIBS_DIR/arm64-v8a/libiodine_android.so" "$JNI_LIBS_DIR/armeabi-v7a/libiodine_android.so"
 
 cd "$ANDROID_DIR"
 

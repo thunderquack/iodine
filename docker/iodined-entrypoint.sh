@@ -12,6 +12,8 @@ fi
 TUNNEL_IP="${IODINED_TUNNEL_IP:-}"
 TOPDOMAIN="${IODINED_TOPDOMAIN:-}"
 PASSWORD="${IODINED_PASSWORD:-}"
+LISTEN_IPV4="${IODINED_LISTEN_IPV4:-0.0.0.0}"
+EXTERNAL_NS_IP="${IODINED_EXTERNAL_NS_IP:-}"
 EXTRA_ARGS="${IODINED_EXTRA_ARGS:-}"
 
 if [ -z "$TUNNEL_IP" ] || [ -z "$TOPDOMAIN" ]; then
@@ -20,9 +22,14 @@ if [ -z "$TUNNEL_IP" ] || [ -z "$TOPDOMAIN" ]; then
 fi
 
 set -- /usr/local/sbin/iodined -f
+set -- "$@" -l "$LISTEN_IPV4"
 
 if [ -n "$PASSWORD" ]; then
   set -- "$@" -P "$PASSWORD"
+fi
+
+if [ -n "$EXTERNAL_NS_IP" ]; then
+  set -- "$@" -n "$EXTERNAL_NS_IP"
 fi
 
 if [ -n "$EXTRA_ARGS" ]; then
