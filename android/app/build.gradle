@@ -1,10 +1,10 @@
-def defaultDomain = System.getenv("IODINE_ANDROID_DEFAULT_DOMAIN") ?: ""
-def defaultPassword = System.getenv("IODINE_ANDROID_DEFAULT_PASSWORD") ?: ""
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+def defaultDomain = System.getenv("IODINE_ANDROID_DEFAULT_DOMAIN") ?: ""
+def defaultPassword = System.getenv("IODINE_ANDROID_DEFAULT_PASSWORD") ?: ""
 
 android {
     namespace "se.kryo.iodine"
