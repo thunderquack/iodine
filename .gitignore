@@ -8,3 +8,4 @@
 /src/libs/*/iodine
 dist/android-apk/out
 docker-compose.yml
+.env
