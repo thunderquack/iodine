@@ -118,7 +118,7 @@ static void handle_full_packet(int tun_fd, struct dnsfd *dns_fds, int userid);
 static void
 debug_log_stderr(const char *fmt, ...)
 {
-	char timestamp[20];
+	char timestamp[32];
 	time_t now;
 	struct tm tm_now;
 	va_list ap;
