@@ -7,6 +7,10 @@ android {
     namespace "se.kryo.iodine"
     compileSdk 34
 
+    buildFeatures {
+        buildConfig true
+    }
+
     defaultConfig {
         applicationId "se.kryo.iodine"
         minSdk 21
@@ -18,9 +22,13 @@ android {
     buildTypes {
         debug {
             minifyEnabled false
+            buildConfigField("String", "DEFAULT_DOMAIN", "\"iodine.pidor.de\"")
+            buildConfigField("String", "DEFAULT_PASSWORD", "\"1\"")
         }
         release {
             minifyEnabled false
+            buildConfigField("String", "DEFAULT_DOMAIN", "\"\"")
+            buildConfigField("String", "DEFAULT_PASSWORD", "\"\"")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
