@@ -32,6 +32,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logView: TextView
     private lateinit var connectButton: Button
     private lateinit var disconnectButton: Button
+    private lateinit var collectNetworkButton: Button
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -70,6 +71,7 @@ class MainActivity : AppCompatActivity() {
         logView = findViewById(R.id.logText)
         connectButton = findViewById(R.id.connectButton)
         disconnectButton = findViewById(R.id.disconnectButton)
+        collectNetworkButton = findViewById(R.id.collectNetworkButton)
 
         restoreInputs()
         status("Idle.")
@@ -87,6 +89,7 @@ class MainActivity : AppCompatActivity() {
 
         connectButton.setOnClickListener { connect() }
         disconnectButton.setOnClickListener { disconnect() }
+        collectNetworkButton.setOnClickListener { collectNetworkSnapshot() }
         logView.setOnClickListener { copyLogToClipboard() }
     }
 
@@ -160,6 +163,11 @@ class MainActivity : AppCompatActivity() {
             .putString(KEY_PASSWORD, passwordView.text.toString())
             .putString(KEY_OPTIONS, optionsView.text.toString().trim())
             .apply()
+    }
+
+    private fun collectNetworkSnapshot() {
+        appendLog(buildNetworkSummary())
+        status("Network configuration collected.")
     }
 
     private fun appendLog(message: String) {
