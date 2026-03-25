@@ -34,6 +34,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var connectButton: Button
     private lateinit var disconnectButton: Button
     private lateinit var collectNetworkButton: Button
+    private lateinit var clearLogButton: Button
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -73,6 +74,7 @@ class MainActivity : AppCompatActivity() {
         connectButton = findViewById(R.id.connectButton)
         disconnectButton = findViewById(R.id.disconnectButton)
         collectNetworkButton = findViewById(R.id.collectNetworkButton)
+        clearLogButton = findViewById(R.id.clearLogButton)
 
         restoreInputs()
         status("Idle.")
@@ -91,6 +93,7 @@ class MainActivity : AppCompatActivity() {
         connectButton.setOnClickListener { connect() }
         disconnectButton.setOnClickListener { disconnect() }
         collectNetworkButton.setOnClickListener { collectNetworkSnapshot() }
+        clearLogButton.setOnClickListener { clearLog() }
         logView.setOnClickListener { copyLogToClipboard() }
     }
 
@@ -174,6 +177,11 @@ class MainActivity : AppCompatActivity() {
     private fun appendLog(message: String) {
         val current = logView.text.toString()
         logView.text = if (current.isEmpty()) message else "$current\n$message"
+    }
+
+    private fun clearLog() {
+        logView.text = ""
+        status("Log cleared.")
     }
 
     private fun copyLogToClipboard() {
