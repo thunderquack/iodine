@@ -39,11 +39,18 @@ login_calculate(char *buf, int buflen, const char *pass, int seed)
 	int *ix;
 	int i;
 	int k;
+	size_t passlen = 0;
 
 	if (buflen < 16)
 		return;
 
-	memcpy(temp, pass, 32);
+	memset(temp, 0, sizeof(temp));
+	if (pass != NULL) {
+		passlen = strlen(pass);
+		if (passlen > sizeof(temp))
+			passlen = sizeof(temp);
+		memcpy(temp, pass, passlen);
+	}
 	ix = (int*) temp;
 
 	for (i = 0; i < 8; i++) {
