@@ -1,3 +1,6 @@
+def defaultDomain = System.getenv("IODINE_ANDROID_DEFAULT_DOMAIN") ?: ""
+def defaultPassword = System.getenv("IODINE_ANDROID_DEFAULT_PASSWORD") ?: ""
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -22,8 +25,8 @@ android {
     buildTypes {
         debug {
             minifyEnabled false
-            buildConfigField("String", "DEFAULT_DOMAIN", "\"iodine.pidor.de\"")
-            buildConfigField("String", "DEFAULT_PASSWORD", "\"1\"")
+            buildConfigField("String", "DEFAULT_DOMAIN", groovy.json.JsonOutput.toJson(defaultDomain))
+            buildConfigField("String", "DEFAULT_PASSWORD", groovy.json.JsonOutput.toJson(defaultPassword))
         }
         release {
             minifyEnabled false

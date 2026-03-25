@@ -36,10 +36,7 @@ RUN yes | sdkmanager --licenses >/dev/null \
         "ndk;${ANDROID_NDK_VERSION}"
 
 WORKDIR /work
-COPY Makefile README-android.txt /work/
-COPY src /work/src
-COPY scripts /work/scripts
-COPY android /work/android
+COPY . /work
 
 RUN sed -i 's/\r$//' /work/scripts/build-android-native.sh /work/scripts/build-android-apk.sh /work/src/osflags
 
