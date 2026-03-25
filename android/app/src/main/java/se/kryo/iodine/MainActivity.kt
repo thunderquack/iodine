@@ -13,6 +13,8 @@ import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.widget.ArrayAdapter
+import android.widget.AutoCompleteTextView
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -24,9 +26,15 @@ import java.util.Collections
 
 class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+    private val resolverSuggestions = listOf(
+        "195.208.4.1",
+        "195.208.5.1",
+        "77.88.8.8",
+        "77.88.8.1"
+    )
 
     private lateinit var statusView: TextView
-    private lateinit var serverView: EditText
+    private lateinit var serverView: AutoCompleteTextView
     private lateinit var domainView: EditText
     private lateinit var passwordView: EditText
     private lateinit var optionsView: EditText
@@ -34,6 +42,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var connectButton: Button
     private lateinit var disconnectButton: Button
     private lateinit var collectNetworkButton: Button
+    private lateinit var clearLogButton: Button
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -73,6 +82,22 @@ class MainActivity : AppCompatActivity() {
         connectButton = findViewById(R.id.connectButton)
         disconnectButton = findViewById(R.id.disconnectButton)
         collectNetworkButton = findViewById(R.id.collectNetworkButton)
+        clearLogButton = findViewById(R.id.clearLogButton)
+
+        serverView.setAdapter(
+            ArrayAdapter(
+                this,
+                android.R.layout.simple_dropdown_item_1line,
+                resolverSuggestions
+            )
+        )
+        serverView.threshold = 0
+        serverView.setOnClickListener { serverView.showDropDown() }
+        serverView.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                serverView.showDropDown()
+            }
+        }
 
         restoreInputs()
         status("Idle.")
@@ -91,6 +116,7 @@ class MainActivity : AppCompatActivity() {
         connectButton.setOnClickListener { connect() }
         disconnectButton.setOnClickListener { disconnect() }
         collectNetworkButton.setOnClickListener { collectNetworkSnapshot() }
+        clearLogButton.setOnClickListener { clearLog() }
         logView.setOnClickListener { copyLogToClipboard() }
     }
 
@@ -174,6 +200,11 @@ class MainActivity : AppCompatActivity() {
     private fun appendLog(message: String) {
         val current = logView.text.toString()
         logView.text = if (current.isEmpty()) message else "$current\n$message"
+    }
+
+    private fun clearLog() {
+        logView.text = ""
+        status("Log cleared.")
     }
 
     private fun copyLogToClipboard() {
