@@ -16,6 +16,7 @@
  */
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -113,6 +114,64 @@ struct dnsfd {
 static int read_dns(int fd, struct dnsfd *dns_fds, int tun_fd, struct query *q);
 static void write_dns(int fd, struct query *q, const char *data, int datalen, char downenc);
 static void handle_full_packet(int tun_fd, struct dnsfd *dns_fds, int userid);
+
+static void
+debug_log_stderr(const char *fmt, ...)
+{
+	char timestamp[32];
+	time_t now;
+	struct tm tm_now;
+	va_list ap;
+
+	now = time(NULL);
+#ifdef WINDOWS32
+	gmtime_s(&tm_now, &now);
+#else
+	gmtime_r(&now, &tm_now);
+#endif
+	strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &tm_now);
+
+	fprintf(stderr, "%s ", timestamp);
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+}
+
+static const char *
+qtype_name(unsigned short type)
+{
+	static char unknown[16];
+
+	switch (type) {
+	case T_A:
+		return "A";
+	case T_NS:
+		return "NS";
+	case T_CNAME:
+		return "CNAME";
+	case T_SOA:
+		return "SOA";
+	case T_PTR:
+		return "PTR";
+	case T_MX:
+		return "MX";
+	case T_TXT:
+		return "TXT";
+	case T_AAAA:
+		return "AAAA";
+	case T_SRV:
+		return "SRV";
+	case T_NULL:
+		return "NULL";
+	case T_ANY:
+		return "ANY";
+	case T_PRIVATE:
+		return "PRIVATE";
+	default:
+		snprintf(unknown, sizeof(unknown), "TYPE%u", type);
+		return unknown;
+	}
+}
 
 static int
 get_dns_fd(struct dnsfd *fds, struct sockaddr_storage *addr)
@@ -266,7 +325,7 @@ static void send_raw(int fd, char *buf, int buflen, int user, int cmd, struct qu
 	packet[RAW_HDR_CMD] = cmd | (user & 0x0F);
 
 	if (debug >= 2) {
-		fprintf(stderr, "TX-raw: client %s, cmd %d, %d bytes\n",
+		debug_log_stderr("TX-raw: client %s, cmd %d, %d bytes\n",
 			format_addr(&q->from, q->fromlen), cmd, len);
 	}
 
@@ -1547,8 +1606,8 @@ handle_ns_request(int dns_fd, struct query *q, int topdomain_offset)
 	}
 
 	if (debug >= 2) {
-		fprintf(stderr, "TX: client %s, type %d, name %s, %d bytes NS reply\n",
-			format_addr(&q->from, q->fromlen), q->type, q->name, len);
+		debug_log_stderr("TX: client %s, type %s, name %s, %d bytes NS reply\n",
+			format_addr(&q->from, q->fromlen), qtype_name(q->type), q->name, len);
 	}
 	if (sendto(dns_fd, buf, len, 0, (struct sockaddr*)&q->from, q->fromlen) <= 0) {
 		warn("ns reply send error");
@@ -1589,8 +1648,8 @@ handle_a_request(int dns_fd, struct query *q, int fakeip)
 	}
 
 	if (debug >= 2) {
-		fprintf(stderr, "TX: client %s, type %d, name %s, %d bytes A reply\n",
-			format_addr(&q->from, q->fromlen), q->type, q->name, len);
+		debug_log_stderr("TX: client %s, type %s, name %s, %d bytes A reply\n",
+			format_addr(&q->from, q->fromlen), qtype_name(q->type), q->name, len);
 	}
 	if (sendto(dns_fd, buf, len, 0, (struct sockaddr*)&q->from, q->fromlen) <= 0) {
 		warn("a reply send error");
@@ -1610,8 +1669,8 @@ handle_underscore_request(int dns_fd, struct query *q, const char *topdomain)
 	}
 
 	if (debug >= 2) {
-		fprintf(stderr, "TX: client %s, type %d, name %s, %d bytes NXDOMAIN reply\n",
-			format_addr(&q->from, q->fromlen), q->type, q->name, len);
+		debug_log_stderr("TX: client %s, type %s, name %s, %d bytes NXDOMAIN reply\n",
+			format_addr(&q->from, q->fromlen), qtype_name(q->type), q->name, len);
 	}
 	if (sendto(dns_fd, buf, len, 0, (struct sockaddr*)&q->from, q->fromlen) <= 0) {
 		warn("nxdomain reply send error");
@@ -1645,7 +1704,7 @@ forward_query(int bind_fd, struct query *q)
 	myaddr->sin_port = htons(bind_port);
 
 	if (debug >= 2) {
-		fprintf(stderr, "TX: NS reply \n");
+		debug_log_stderr("TX: NS reply \n");
 	}
 
 	if (sendto(bind_fd, buf, len, 0, (struct sockaddr*)&q->from, q->fromlen) <= 0) {
@@ -1674,7 +1733,7 @@ tunnel_bind(int bind_fd, struct dnsfd *dns_fds)
 	id = dns_get_id(packet, r);
 
 	if (debug >= 2) {
-		fprintf(stderr, "RX: Got response on query %u from DNS\n", (id & 0xFFFF));
+		debug_log_stderr("RX: Got response on query %u from DNS\n", (id & 0xFFFF));
 	}
 
 	/* Get sockaddr from id */
@@ -1687,7 +1746,7 @@ tunnel_bind(int bind_fd, struct dnsfd *dns_fds)
 	}
 
 	if (debug >= 2) {
-		fprintf(stderr, "TX: client %s id %u, %d bytes\n",
+		debug_log_stderr("TX: client %s id %u, %d bytes\n",
 			format_addr(&query->addr, query->addrlen), (id & 0xffff), r);
 	}
 
@@ -1711,8 +1770,8 @@ tunnel_dns(int tun_fd, int dns_fd, struct dnsfd *dns_fds, int bind_fd)
 		return 0;
 
 	if (debug >= 2) {
-		fprintf(stderr, "RX: client %s, type %d, name %s\n",
-			format_addr(&q.from, q.fromlen), q.type, q.name);
+		debug_log_stderr("RX: client %s, type %s, name %s\n",
+			format_addr(&q.from, q.fromlen), qtype_name(q.type), q.name);
 	}
 
 	domain_len = query_datalen(q.name, topdomain);
@@ -1939,10 +1998,10 @@ handle_full_packet(int tun_fd, struct dnsfd *dns_fds, int userid)
 					 RAW_HDR_CMD_DATA, &users[touser].q);
 			}
 		}
-	} else {
-		if (debug >= 1)
-			fprintf(stderr, "Discarded data, uncompress() result: %d\n", ret);
-	}
+		} else {
+			if (debug >= 1)
+				debug_log_stderr("Discarded data, uncompress() result: %d\n", ret);
+		}
 
 	/* This packet is done */
 	users[userid].inpacket.len = 0;
@@ -1964,7 +2023,7 @@ handle_raw_login(char *packet, int len, struct query *q, int fd, int userid)
 	if (users[userid].last_pkt + 60 < time(NULL)) return;
 
 	if (debug >= 1) {
-		fprintf(stderr, "IN   login raw, len %d, from user %d\n",
+		debug_log_stderr("IN   login raw, len %d, from user %d\n",
 			len, userid);
 	}
 
@@ -2006,7 +2065,7 @@ handle_raw_data(char *packet, int len, struct query *q, struct dnsfd *dns_fds, i
 	users[userid].inpacket.len = len;
 
 	if (debug >= 1) {
-		fprintf(stderr, "IN   pkt raw, total %d, from user %d\n",
+		debug_log_stderr("IN   pkt raw, total %d, from user %d\n",
 			users[userid].inpacket.len, userid);
 	}
 
@@ -2026,7 +2085,7 @@ handle_raw_ping(struct query *q, int dns_fd, int userid)
 	memcpy(&(users[userid].q), q, sizeof(struct query));
 
 	if (debug >= 1) {
-		fprintf(stderr, "IN   ping raw, from user %d\n", userid);
+		debug_log_stderr("IN   ping raw, from user %d\n", userid);
 	}
 
 	/* Send ping reply */
@@ -2297,8 +2356,8 @@ write_dns(int fd, struct query *q, const char *data, int datalen, char downenc)
 	}
 
 	if (debug >= 2) {
-		fprintf(stderr, "TX: client %s, type %d, name %s, %d bytes data\n",
-			format_addr(&q->from, q->fromlen), q->type, q->name, datalen);
+		debug_log_stderr("TX: client %s, type %s, name %s, %d bytes data\n",
+			format_addr(&q->from, q->fromlen), qtype_name(q->type), q->name, datalen);
 	}
 
 	sendto(fd, buf, len, 0, (struct sockaddr*)&q->from, q->fromlen);

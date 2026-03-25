@@ -2,19 +2,29 @@ package se.kryo.iodine
 
 import android.app.Activity
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import java.net.NetworkInterface
+import java.util.Collections
 
 class MainActivity : AppCompatActivity() {
+    private val prefs by lazy { getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+
     private lateinit var statusView: TextView
     private lateinit var serverView: EditText
     private lateinit var domainView: EditText
@@ -23,6 +33,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logView: TextView
     private lateinit var connectButton: Button
     private lateinit var disconnectButton: Button
+    private lateinit var collectNetworkButton: Button
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -61,11 +72,13 @@ class MainActivity : AppCompatActivity() {
         logView = findViewById(R.id.logText)
         connectButton = findViewById(R.id.connectButton)
         disconnectButton = findViewById(R.id.disconnectButton)
+        collectNetworkButton = findViewById(R.id.collectNetworkButton)
 
-        optionsView.setText("-f")
+        restoreInputs()
         status("Idle.")
         appendLog("Connect uses Android VpnService, not root.")
         appendLog("Server is optional. If blank, the app tries the active network's DNS resolver.")
+        appendLog(buildNetworkSummary())
 
         val filter = IntentFilter(IodineVpnService.ACTION_STATUS)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -77,6 +90,8 @@ class MainActivity : AppCompatActivity() {
 
         connectButton.setOnClickListener { connect() }
         disconnectButton.setOnClickListener { disconnect() }
+        collectNetworkButton.setOnClickListener { collectNetworkSnapshot() }
+        logView.setOnClickListener { copyLogToClipboard() }
     }
 
     override fun onDestroy() {
@@ -85,6 +100,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun connect() {
+        saveInputs()
+
         val domain = domainView.text.toString().trim()
         if (domain.isBlank()) {
             status("Missing domain.")
@@ -122,8 +139,116 @@ class MainActivity : AppCompatActivity() {
         statusView.text = message
     }
 
+    private fun restoreInputs() {
+        serverView.setText(prefs.getString(KEY_SERVER, "").orEmpty())
+
+        if (prefs.contains(KEY_DOMAIN)) {
+            domainView.setText(prefs.getString(KEY_DOMAIN, "").orEmpty())
+        } else {
+            domainView.setText(BuildConfig.DEFAULT_DOMAIN)
+        }
+
+        if (prefs.contains(KEY_PASSWORD)) {
+            passwordView.setText(prefs.getString(KEY_PASSWORD, "").orEmpty())
+        } else {
+            passwordView.setText(BuildConfig.DEFAULT_PASSWORD)
+        }
+
+        optionsView.setText(prefs.getString(KEY_OPTIONS, "-f").orEmpty())
+    }
+
+    private fun saveInputs() {
+        prefs.edit()
+            .putString(KEY_SERVER, serverView.text.toString().trim())
+            .putString(KEY_DOMAIN, domainView.text.toString().trim())
+            .putString(KEY_PASSWORD, passwordView.text.toString())
+            .putString(KEY_OPTIONS, optionsView.text.toString().trim())
+            .apply()
+    }
+
+    private fun collectNetworkSnapshot() {
+        appendLog(buildNetworkSummary())
+        status("Network configuration collected.")
+    }
+
     private fun appendLog(message: String) {
         val current = logView.text.toString()
         logView.text = if (current.isEmpty()) message else "$current\n$message"
+    }
+
+    private fun copyLogToClipboard() {
+        val text = logView.text.toString()
+        if (text.isBlank()) {
+            status("Nothing to copy.")
+            return
+        }
+
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("iodine-log", text))
+        status("Log copied to clipboard.")
+        Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun buildNetworkSummary(): String {
+        val lines = mutableListOf<String>()
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val activeNetwork = connectivityManager.activeNetwork
+        val capabilities = activeNetwork?.let { connectivityManager.getNetworkCapabilities(it) }
+        val linkProperties = activeNetwork?.let { connectivityManager.getLinkProperties(it) }
+
+        lines += "Network snapshot:"
+        if (activeNetwork == null) {
+            lines += "Active network: none"
+        } else {
+            lines += "Active network: present"
+        }
+
+        if (capabilities != null) {
+            val transports = mutableListOf<String>()
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) transports += "WIFI"
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) transports += "CELLULAR"
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) transports += "ETHERNET"
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) transports += "VPN"
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH)) transports += "BLUETOOTH"
+            lines += "Transports: ${if (transports.isEmpty()) "unknown" else transports.joinToString(", ")}"
+            lines += "Validated: ${capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)}"
+            lines += "Internet: ${capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)}"
+        }
+
+        if (linkProperties != null) {
+            lines += "Link interface: ${linkProperties.interfaceName ?: "unknown"}"
+            if (linkProperties.linkAddresses.isNotEmpty()) {
+                lines += "Link addresses:"
+                linkProperties.linkAddresses.forEach { lines += "  ${it.address.hostAddress}/${it.prefixLength}" }
+            }
+            if (linkProperties.routes.isNotEmpty()) {
+                lines += "Routes:"
+                linkProperties.routes.forEach { lines += "  $it" }
+            }
+            if (linkProperties.dnsServers.isNotEmpty()) {
+                lines += "DNS servers:"
+                linkProperties.dnsServers.forEach { lines += "  ${it.hostAddress}" }
+            }
+        }
+
+        lines += "Interfaces:"
+        Collections.list(NetworkInterface.getNetworkInterfaces() ?: return lines.joinToString("\n"))
+            .sortedBy { it.name }
+            .forEach { networkInterface ->
+            lines += "  ${networkInterface.name} up=${networkInterface.isUp} loopback=${networkInterface.isLoopback}"
+            networkInterface.interfaceAddresses.forEach { address ->
+                lines += "    ${address.address.hostAddress}/${address.networkPrefixLength}"
+            }
+            }
+
+        return lines.joinToString("\n")
+    }
+
+    companion object {
+        private const val PREFS_NAME = "iodine_prefs"
+        private const val KEY_SERVER = "server"
+        private const val KEY_DOMAIN = "domain"
+        private const val KEY_PASSWORD = "password"
+        private const val KEY_OPTIONS = "options"
     }
 }

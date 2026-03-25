@@ -4,4 +4,7 @@
     <color name="color_on_surface">#1F1A17</color>
     <color name="color_primary">#B24A1B</color>
     <color name="color_muted">#7B6E66</color>
+    <color name="color_input_background">#FFFFFFFF</color>
+    <color name="color_input_stroke">#D3B7A6</color>
+    <color name="color_log_background">#E7DDD6</color>
 </resources>

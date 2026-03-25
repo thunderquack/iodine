@@ -7,6 +7,13 @@ import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import java.io.ByteArrayOutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.util.Locale
+import kotlin.random.Random
 
 class IodineVpnService : VpnService() {
     private var tunInterface: ParcelFileDescriptor? = null
@@ -59,21 +66,36 @@ class IodineVpnService : VpnService() {
         val options = intent.getStringExtra(EXTRA_OPTIONS)?.trim().orEmpty()
 
         worker = Thread {
-            val effectiveResolver = if (resolver.isNotBlank()) resolver else detectSystemResolver()
-            if (effectiveResolver.isNullOrBlank()) {
+            val resolvers = resolverCandidates(resolver)
+            if (resolvers.isEmpty()) {
                 broadcastStatus(
                     status = "No resolver available.",
-                    log = "Could not determine a DNS resolver for the active network."
+                    log = "Could not determine any DNS resolvers for the active network."
                 )
                 worker = null
                 return@Thread
             }
 
-            broadcastStatus(status = "Handshaking.", log = "Using resolver $effectiveResolver")
+            broadcastStatus(log = "Resolver candidates: ${resolvers.joinToString(", ")}")
 
-            val ok = nativeHandshake(effectiveResolver, domain, password, options)
-            if (!ok) {
-                broadcastStatus(status = "Handshake failed.")
+            var effectiveResolver: String? = null
+            for (candidate in resolvers) {
+                broadcastStatus(log = "Probing resolver $candidate")
+                if (!probeResolver(candidate, domain)) {
+                    continue
+                }
+
+                broadcastStatus(status = "Handshaking.", log = "Probe ok via $candidate, starting handshake.")
+                if (nativeHandshake(candidate, domain, password, options)) {
+                    effectiveResolver = candidate
+                    break
+                }
+
+                broadcastStatus(log = "Handshake failed via $candidate")
+            }
+
+            if (effectiveResolver == null) {
+                broadcastStatus(status = "Handshake failed.", log = "All resolver candidates failed.")
                 worker = null
                 return@Thread
             }
@@ -88,12 +110,15 @@ class IodineVpnService : VpnService() {
                 log = "Client IP $clientIp, server IP $serverIp, mtu $mtu, prefix $netmask"
             )
 
-            tunInterface = Builder()
+            val builder = Builder()
                 .setSession("Iodine")
                 .setMtu(mtu)
                 .addAddress(clientIp, netmask)
                 .addRoute("0.0.0.0", 0)
-                .establish()
+
+            builder.addDnsServer(effectiveResolver)
+
+            tunInterface = builder.establish()
 
             val tunFd = tunInterface?.detachFd()
             if (tunFd == null) {
@@ -122,15 +147,116 @@ class IodineVpnService : VpnService() {
         stopSelf()
     }
 
-    private fun detectSystemResolver(): String? {
+    private fun resolverCandidates(explicitResolver: String): List<String> {
+        if (explicitResolver.isNotBlank()) {
+            return explicitResolver
+                .split(',', ';', ' ', '\n', '\t')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+        }
+
+        return detectSystemResolvers()
+    }
+
+    private fun detectSystemResolvers(): List<String> {
         val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val active = manager.activeNetwork ?: return null
-        val linkProperties: LinkProperties = manager.getLinkProperties(active) ?: return null
+        val active = manager.activeNetwork ?: return emptyList()
+        val linkProperties: LinkProperties = manager.getLinkProperties(active) ?: return emptyList()
 
         return linkProperties.dnsServers
             .map { it.hostAddress.orEmpty() }
-            .firstOrNull { it.contains(".") }
-            ?: linkProperties.dnsServers.firstOrNull()?.hostAddress
+            .filter { it.isNotBlank() }
+            .distinct()
+    }
+
+    private fun probeResolver(resolver: String, domain: String): Boolean {
+        val dnsServer = try {
+            InetAddress.getByName(resolver)
+        } catch (_: Exception) {
+            broadcastStatus(log = "Probe failed via $resolver: invalid address")
+            return false
+        }
+
+        val probes = listOf(
+            Triple("NS", buildProbeName("probe", domain), 2),
+            Triple("TXT", buildProbeName("z", domain), 16),
+            Triple("NULL", buildProbeName("z", domain), 10)
+        )
+
+        var anySuccess = false
+        for ((label, name, qtype) in probes) {
+            val ok = runSingleProbe(dnsServer, resolver, name, qtype)
+            if (ok) {
+                broadcastStatus(log = "Probe $label ok via $resolver")
+                anySuccess = true
+            } else {
+                broadcastStatus(log = "Probe $label failed via $resolver")
+            }
+        }
+
+        return anySuccess
+    }
+
+    private fun runSingleProbe(dnsServer: InetAddress, resolver: String, name: String, qtype: Int): Boolean {
+        return try {
+            val socket = DatagramSocket()
+            socket.soTimeout = PROBE_TIMEOUT_MS
+
+            try {
+                val query = buildDnsQuery(name, qtype)
+                val packet = DatagramPacket(query, query.size, InetSocketAddress(dnsServer, 53))
+                socket.send(packet)
+
+                val response = ByteArray(2048)
+                val reply = DatagramPacket(response, response.size)
+                socket.receive(reply)
+                reply.length >= 12
+            } finally {
+                socket.close()
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun buildProbeName(prefix: String, domain: String): String {
+        val suffix = Random.nextInt(0x10000).toString(16).padStart(4, '0')
+        return "$prefix$suffix.$domain".lowercase(Locale.US)
+    }
+
+    private fun buildDnsQuery(name: String, qtype: Int): ByteArray {
+        val out = ByteArrayOutputStream()
+        val id = Random.nextInt(0x10000)
+
+        out.write((id shr 8) and 0xff)
+        out.write(id and 0xff)
+        out.write(0x01)
+        out.write(0x00)
+        out.write(0x00)
+        out.write(0x01)
+        out.write(0x00)
+        out.write(0x00)
+        out.write(0x00)
+        out.write(0x00)
+        out.write(0x00)
+        out.write(0x00)
+
+        name.split('.')
+            .filter { it.isNotEmpty() }
+            .forEach { label ->
+                val bytes = label.toByteArray(Charsets.US_ASCII)
+                out.write(bytes.size)
+                out.write(bytes)
+            }
+        out.write(0x00)
+
+        out.write((qtype shr 8) and 0xff)
+        out.write(qtype and 0xff)
+        out.write(0x00)
+        out.write(0x01)
+
+        return out.toByteArray()
     }
 
     private fun broadcastStatus(status: String? = null, log: String? = null) {
@@ -155,6 +281,7 @@ class IodineVpnService : VpnService() {
         const val EXTRA_OPTIONS = "options"
         const val EXTRA_STATUS = "status"
         const val EXTRA_LOG = "log"
+        private const val PROBE_TIMEOUT_MS = 1500
 
         init {
             System.loadLibrary("iodine_android")

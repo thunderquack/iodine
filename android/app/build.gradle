@@ -3,9 +3,16 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+def defaultDomain = System.getenv("IODINE_ANDROID_DEFAULT_DOMAIN") ?: ""
+def defaultPassword = System.getenv("IODINE_ANDROID_DEFAULT_PASSWORD") ?: ""
+
 android {
     namespace "se.kryo.iodine"
     compileSdk 34
+
+    buildFeatures {
+        buildConfig true
+    }
 
     defaultConfig {
         applicationId "se.kryo.iodine"
@@ -18,9 +25,13 @@ android {
     buildTypes {
         debug {
             minifyEnabled false
+            buildConfigField("String", "DEFAULT_DOMAIN", groovy.json.JsonOutput.toJson(defaultDomain))
+            buildConfigField("String", "DEFAULT_PASSWORD", groovy.json.JsonOutput.toJson(defaultPassword))
         }
         release {
             minifyEnabled false
+            buildConfigField("String", "DEFAULT_DOMAIN", "\"\"")
+            buildConfigField("String", "DEFAULT_PASSWORD", "\"\"")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

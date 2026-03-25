@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@color/color_surface">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -13,50 +14,104 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/app_name"
+            android:textColor="@color/color_on_surface"
             android:textAppearance="@style/TextAppearance.MaterialComponents.Headline5" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/status_label"
+            android:textColor="@color/color_on_surface"
+            android:textStyle="bold" />
 
         <TextView
             android:id="@+id/statusText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="@string/status_idle" />
+            android:layout_marginTop="6dp"
+            android:text="@string/status_idle"
+            android:textColor="@color/color_on_surface" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/server_label"
+            android:textColor="@color/color_on_surface"
+            android:textStyle="bold" />
 
         <EditText
             android:id="@+id/serverInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/input_background"
             android:hint="@string/server_hint"
             android:inputType="textUri|textNoSuggestions"
+            android:padding="12dp"
+            android:textColor="@color/color_on_surface"
             android:textColorHint="@color/color_muted" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/domain_label"
+            android:textColor="@color/color_on_surface"
+            android:textStyle="bold" />
 
         <EditText
             android:id="@+id/domainInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/input_background"
             android:hint="@string/domain_hint"
             android:inputType="textUri|textNoSuggestions"
+            android:padding="12dp"
+            android:textColor="@color/color_on_surface"
             android:textColorHint="@color/color_muted" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/password_label"
+            android:textColor="@color/color_on_surface"
+            android:textStyle="bold" />
 
         <EditText
             android:id="@+id/passwordInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/input_background"
             android:hint="@string/password_hint"
             android:inputType="textPassword"
+            android:padding="12dp"
+            android:textColor="@color/color_on_surface"
             android:textColorHint="@color/color_muted" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/options_label"
+            android:textColor="@color/color_on_surface"
+            android:textStyle="bold" />
 
         <EditText
             android:id="@+id/optionsInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/input_background"
             android:hint="@string/options_hint"
             android:inputType="textMultiLine|textNoSuggestions"
             android:minLines="2"
+            android:padding="12dp"
+            android:textColor="@color/color_on_surface"
             android:textColorHint="@color/color_muted" />
 
         <Button
@@ -73,11 +128,19 @@
             android:layout_marginTop="12dp"
             android:text="@string/disconnect" />
 
+        <Button
+            android:id="@+id/collectNetworkButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/collect_network" />
+
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
             android:text="@string/log_title"
+            android:textColor="@color/color_on_surface"
             android:textAppearance="@style/TextAppearance.MaterialComponents.Subtitle1" />
 
         <TextView
@@ -85,10 +148,13 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:background="#14000000"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="@drawable/log_background"
             android:fontFamily="monospace"
             android:padding="12dp"
-            android:textIsSelectable="true" />
+            android:textColor="@color/color_on_surface"
+            android:textIsSelectable="false" />
 
     </LinearLayout>
 </ScrollView>

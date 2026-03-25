@@ -8,6 +8,16 @@ APK_RELATIVE_PATH="app/build/outputs/apk/debug/app-debug.apk"
 APK_OUT_DIR="${APK_OUT_DIR:-}"
 ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-}"
 
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT_DIR/.env"
+  set +a
+fi
+
+export IODINE_ANDROID_DEFAULT_DOMAIN="${IODINE_ANDROID_DEFAULT_DOMAIN:-}"
+export IODINE_ANDROID_DEFAULT_PASSWORD="${IODINE_ANDROID_DEFAULT_PASSWORD:-}"
+
 "$ROOT_DIR/scripts/build-android-native.sh"
 
 mkdir -p "$JNI_LIBS_DIR/arm64-v8a" "$JNI_LIBS_DIR/armeabi-v7a"

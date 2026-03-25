@@ -2,11 +2,17 @@
 <resources>
     <string name="app_name">Iodine</string>
     <string name="status_idle">Idle</string>
+    <string name="status_label">Status</string>
+    <string name="server_label">Server / Resolver</string>
     <string name="server_hint">Server or resolver, optional, for example: 8.8.8.8</string>
+    <string name="domain_label">Delegated Domain</string>
     <string name="domain_hint">Delegated domain, for example: t1.example.com</string>
+    <string name="password_label">Password</string>
     <string name="password_hint">Password</string>
+    <string name="options_label">Options</string>
     <string name="options_hint">Extra options, for example: -f -r</string>
     <string name="connect">Connect</string>
     <string name="disconnect">Disconnect</string>
+    <string name="collect_network">Collect Network Config</string>
     <string name="log_title">Process Log</string>
 </resources>

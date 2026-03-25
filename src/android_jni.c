@@ -22,6 +22,7 @@ static int nameserv_family = AF_UNSPEC;
 static int raw_mode = 1;
 static int autodetect_frag_size = 1;
 static int max_downstream_frag_size = 3072;
+static char password_buf[33];
 
 static char *
 copy_jstring(JNIEnv *env, jstring value)
@@ -223,7 +224,9 @@ Java_se_kryo_iodine_IodineVpnService_nativeHandshake(JNIEnv *env, jobject thiz,
 
 	client_set_nameserver(&nameservaddr, nameservaddr_len);
 	client_set_topdomain(domain_copy);
-	client_set_password(password_copy);
+	memset(password_buf, 0, sizeof(password_buf));
+	strncpy(password_buf, password_copy, sizeof(password_buf) - 1);
+	client_set_password(password_buf);
 
 	dns_fd = open_dns_from_host(NULL, 0, nameservaddr.ss_family, AI_PASSIVE);
 	if (dns_fd < 0) {
