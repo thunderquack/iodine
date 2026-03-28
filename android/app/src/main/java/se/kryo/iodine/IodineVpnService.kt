@@ -7,6 +7,7 @@ import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -325,6 +326,8 @@ class IodineVpnService : VpnService() {
     }
 
     private fun broadcastStatus(status: String? = null, log: String? = null) {
+        status?.let { Log.i("iodine-android", "STATUS: $it") }
+        log?.let { Log.i("iodine-android", it) }
         val intent = Intent(ACTION_STATUS).setPackage(packageName)
         if (status != null) {
             intent.putExtra(EXTRA_STATUS, status)

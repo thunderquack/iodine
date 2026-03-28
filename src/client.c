@@ -2645,22 +2645,32 @@ client_handshake(int dns_fd, int raw_mode, int autodetect_frag_size, int fragsiz
 		if (!running)
 			return -1;
 
+		client_debugf("Handshake stage: downstream codec selected, lazymode=%d autodetect_frag_size=%d fragsize=%d\n",
+		              lazymode, autodetect_frag_size, fragsize);
+
 		if (lazymode) {
+			client_debugf("Handshake stage: trying lazy mode\n");
 			handshake_try_lazy(dns_fd);
 		}
 		if (!running)
 			return -1;
 
 		if (autodetect_frag_size) {
+			client_debugf("Handshake stage: autoprobing downstream fragment size\n");
 			fragsize = handshake_autoprobe_fragsize(dns_fd);
 			if (!fragsize) {
+				client_debugf("Handshake stage: downstream fragment autoprobe failed\n");
 				return 1;
 			}
+			client_debugf("Handshake stage: downstream fragment autoprobe chose %d\n", fragsize);
 		}
 
+		client_debugf("Handshake stage: setting downstream fragment size to %d\n", fragsize);
 		handshake_set_fragsize(dns_fd, fragsize);
 		if (!running)
 			return -1;
+
+		client_debugf("Handshake stage: completed successfully\n");
 	}
 
 	return 0;

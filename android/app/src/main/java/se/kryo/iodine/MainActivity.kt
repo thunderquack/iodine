@@ -13,6 +13,7 @@ import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
 import android.widget.Button
@@ -23,6 +24,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import com.google.android.material.switchmaterial.SwitchMaterial
+import java.net.HttpURLConnection
+import java.net.URL
 import java.net.NetworkInterface
 import java.util.Collections
 
@@ -208,6 +211,10 @@ class MainActivity : AppCompatActivity() {
                 appendLog("ADB requested disconnect.")
                 disconnect()
             }
+            ACTION_ADB_HTTP_PROBE -> {
+                appendLog("ADB requested HTTP probe.")
+                runHttpProbe()
+            }
         }
     }
 
@@ -289,6 +296,54 @@ class MainActivity : AppCompatActivity() {
         status("Log cleared.")
     }
 
+    private fun runHttpProbe() {
+        status("Running HTTP probe.")
+        Thread {
+            val targets = listOf(
+                "https://one.one.one.one",
+                "https://example.com"
+            )
+
+            for (target in targets) {
+                appendLogOnUi("HTTP probe starting: $target")
+                try {
+                    val connection = (URL(target).openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 5000
+                        readTimeout = 5000
+                        instanceFollowRedirects = false
+                        requestMethod = "GET"
+                    }
+                    connection.connect()
+                    val code = connection.responseCode
+                    val location = connection.getHeaderField("Location")
+                    val summary = buildString {
+                        append("HTTP probe result: ")
+                        append(target)
+                        append(" -> ")
+                        append(code)
+                        if (!location.isNullOrBlank()) {
+                            append(", Location=")
+                            append(location)
+                        }
+                    }
+                    appendLogOnUi(summary)
+                    connection.inputStream?.close()
+                    connection.errorStream?.close()
+                    connection.disconnect()
+                } catch (e: Exception) {
+                    appendLogOnUi("HTTP probe failed: $target -> ${e.message ?: e.javaClass.simpleName}")
+                }
+            }
+
+            runOnUiThread { status("HTTP probe finished.") }
+        }.start()
+    }
+
+    private fun appendLogOnUi(message: String) {
+        Log.i("iodine-android", message)
+        runOnUiThread { appendLog(message) }
+    }
+
     private fun copyLogToClipboard() {
         val text = logView.text.toString()
         if (text.isBlank()) {
@@ -360,6 +415,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val ACTION_ADB_CONNECT = "se.kryo.iodine.action.ADB_CONNECT"
         const val ACTION_ADB_DISCONNECT = "se.kryo.iodine.action.ADB_DISCONNECT"
+        const val ACTION_ADB_HTTP_PROBE = "se.kryo.iodine.action.ADB_HTTP_PROBE"
         private const val PREFS_NAME = "iodine_prefs"
         private const val KEY_USE_DOH = "use_doh"
         private const val KEY_SERVER = "server"
@@ -367,6 +423,6 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_DOMAIN = "domain"
         private const val KEY_PASSWORD = "password"
         private const val KEY_OPTIONS = "options"
-        private const val DEFAULT_OPTIONS = "-f -r -T TXT -O Base32 -L 0 -M 200"
+        private const val DEFAULT_OPTIONS = "-f -r -T TXT -O Base32 -L 0 -m 200 -M 200"
     }
 }
