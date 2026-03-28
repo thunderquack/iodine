@@ -423,6 +423,6 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_DOMAIN = "domain"
         private const val KEY_PASSWORD = "password"
         private const val KEY_OPTIONS = "options"
-        private const val DEFAULT_OPTIONS = "-f -r -T NULL -O Base32 -L 0 -m 200 -M 200"
+        private const val DEFAULT_OPTIONS = "-f -r -T CNAME -O Base32 -L 0 -m 200 -M 200"
     }
 }
