@@ -101,6 +101,7 @@ class DohRelay(
                 val query = packet.data.copyOf(packet.length)
                 emitLog("DoH relay query ${describeDnsQuery(query)} from ${packet.socketAddress}")
                 val response = executeDohQuery(httpUrl, query) ?: continue
+                emitLog("DoH relay response ${describeDnsResponse(response)}")
 
                 val reply = DatagramPacket(
                     response,
@@ -182,6 +183,23 @@ class DohRelay(
 
         val qtype = ((query[offset].toInt() and 0xff) shl 8) or (query[offset + 1].toInt() and 0xff)
         return "id=$id qtype=$qtype qname=${labels.joinToString(".")}"
+    }
+
+    private fun describeDnsResponse(response: ByteArray): String {
+        if (response.size < 12) {
+            return "len=${response.size}"
+        }
+
+        val id = ((response[0].toInt() and 0xff) shl 8) or (response[1].toInt() and 0xff)
+        val flags = ((response[2].toInt() and 0xff) shl 8) or (response[3].toInt() and 0xff)
+        val rcode = flags and 0x000f
+        val qd = ((response[4].toInt() and 0xff) shl 8) or (response[5].toInt() and 0xff)
+        val an = ((response[6].toInt() and 0xff) shl 8) or (response[7].toInt() and 0xff)
+        val ns = ((response[8].toInt() and 0xff) shl 8) or (response[9].toInt() and 0xff)
+        val ar = ((response[10].toInt() and 0xff) shl 8) or (response[11].toInt() and 0xff)
+        val truncated = (flags and 0x0200) != 0
+
+        return "id=$id rcode=$rcode qd=$qd an=$an ns=$ns ar=$ar tc=$truncated len=${response.size}"
     }
 
     private class ProtectingSocketFactory(
