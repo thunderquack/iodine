@@ -9,6 +9,7 @@ import okhttp3.Request
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.InetAddress
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executors
 
 class ProbeActivity : AppCompatActivity() {
@@ -45,6 +46,7 @@ class ProbeActivity : AppCompatActivity() {
     }
 
     private fun runDns(target: String) {
+        appendLog("DNS start: $target")
         try {
             val addresses = InetAddress.getAllByName(target).joinToString(", ") { it.hostAddress ?: "?" }
             appendLog("DNS ok: $target -> $addresses")
@@ -54,12 +56,18 @@ class ProbeActivity : AppCompatActivity() {
     }
 
     private fun runPing(target: String, count: Int) {
+        appendLog("Ping start: target=$target count=$count")
         try {
             val process = ProcessBuilder("ping", "-c", count.toString(), target)
                 .redirectErrorStream(true)
                 .start()
+            if (!process.waitFor(8, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                appendLog("ping timeout after 8s")
+                return
+            }
             val output = BufferedReader(InputStreamReader(process.inputStream)).use { it.readText().trim() }
-            val exit = process.waitFor()
+            val exit = process.exitValue()
             appendLog("ping exit=$exit")
             if (output.isNotEmpty()) {
                 appendLog(output)
@@ -70,8 +78,13 @@ class ProbeActivity : AppCompatActivity() {
     }
 
     private fun runHttp(url: String) {
+        appendLog("HTTP start: $url")
         try {
-            val client = OkHttpClient.Builder().followRedirects(true).followSslRedirects(true).build()
+            val client = OkHttpClient.Builder()
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .callTimeout(8, TimeUnit.SECONDS)
+                .build()
             val request = Request.Builder().url(url).build()
             client.newCall(request).execute().use { response ->
                 appendLog("HTTP ${response.code} ${response.message} via ${response.protocol} for $url")
