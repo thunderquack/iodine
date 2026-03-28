@@ -2,8 +2,12 @@ package se.kryo.iodine.probe
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.DnsResolver
+import android.net.Network
 import android.net.NetworkCapabilities
+import android.os.Build
 import android.os.Bundle
+import android.os.CancellationSignal
 import android.util.Log
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -12,6 +16,7 @@ import okhttp3.Request
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.InetAddress
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executors
 
@@ -82,6 +87,51 @@ class ProbeActivity : AppCompatActivity() {
             appendLog("DNS ok: $target -> $addresses")
         } catch (t: Throwable) {
             appendLog("DNS failed: $target -> ${t.javaClass.simpleName}: ${t.message}")
+        }
+        runExplicitDns(target)
+    }
+
+    private fun runExplicitDns(target: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            appendLog("DNS explicit skipped: API<29")
+            return
+        }
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val active = manager.activeNetwork
+        if (active == null) {
+            appendLog("DNS explicit skipped: no active network")
+            return
+        }
+        appendLog("DNS explicit start: $target")
+        val latch = CountDownLatch(1)
+        var result: String? = null
+        var error: String? = null
+        DnsResolver.getInstance().query(
+            active,
+            target,
+            DnsResolver.FLAG_EMPTY,
+            executor,
+            CancellationSignal(),
+            object : DnsResolver.Callback<List<InetAddress>> {
+                override fun onAnswer(answer: List<InetAddress>, rcode: Int) {
+                    result = answer.joinToString(", ") { it.hostAddress ?: "?" } + " rcode=$rcode"
+                    latch.countDown()
+                }
+
+                override fun onError(errorCode: DnsResolver.DnsException) {
+                    error = "${errorCode.javaClass.simpleName}: ${errorCode.message}"
+                    latch.countDown()
+                }
+            }
+        )
+        if (!latch.await(8, TimeUnit.SECONDS)) {
+            appendLog("DNS explicit timeout after 8s")
+            return
+        }
+        if (result != null) {
+            appendLog("DNS explicit ok: $target -> $result")
+        } else {
+            appendLog("DNS explicit failed: $target -> $error")
         }
     }
 
