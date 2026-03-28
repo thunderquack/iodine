@@ -137,11 +137,19 @@ class MainActivity : AppCompatActivity() {
         transportSwitch.setOnCheckedChangeListener { _, isChecked ->
             updateTransportUi(isChecked)
         }
+
+        handleLaunchIntent(intent)
     }
 
     override fun onDestroy() {
         unregisterReceiver(statusReceiver)
         super.onDestroy()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleLaunchIntent(intent)
     }
 
     private fun connect() {
@@ -173,6 +181,34 @@ class MainActivity : AppCompatActivity() {
             putExtra(IodineVpnService.EXTRA_OPTIONS, optionsView.text.toString().trim())
         }
         startService(intent)
+    }
+
+    private fun handleLaunchIntent(intent: Intent?) {
+        if (intent == null) {
+            return
+        }
+
+        if (intent.hasExtra(IodineVpnService.EXTRA_USE_DOH)) {
+            transportSwitch.isChecked = intent.getBooleanExtra(IodineVpnService.EXTRA_USE_DOH, transportSwitch.isChecked)
+        }
+        intent.getStringExtra(IodineVpnService.EXTRA_SERVER)?.let { serverView.setText(it) }
+        intent.getStringExtra(IodineVpnService.EXTRA_DOH_SERVER)?.let { dohView.setText(it) }
+        intent.getStringExtra(IodineVpnService.EXTRA_DOMAIN)?.let { domainView.setText(it) }
+        intent.getStringExtra(IodineVpnService.EXTRA_PASSWORD)?.let { passwordView.setText(it) }
+        intent.getStringExtra(IodineVpnService.EXTRA_OPTIONS)?.let { optionsView.setText(it) }
+
+        updateTransportUi(transportSwitch.isChecked)
+
+        when (intent.action) {
+            ACTION_ADB_CONNECT -> {
+                appendLog("ADB requested connect.")
+                connect()
+            }
+            ACTION_ADB_DISCONNECT -> {
+                appendLog("ADB requested disconnect.")
+                disconnect()
+            }
+        }
     }
 
     private fun disconnect() {
@@ -322,6 +358,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        const val ACTION_ADB_CONNECT = "se.kryo.iodine.action.ADB_CONNECT"
+        const val ACTION_ADB_DISCONNECT = "se.kryo.iodine.action.ADB_DISCONNECT"
         private const val PREFS_NAME = "iodine_prefs"
         private const val KEY_USE_DOH = "use_doh"
         private const val KEY_SERVER = "server"
