@@ -21,6 +21,8 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.isVisible
+import com.google.android.material.switchmaterial.SwitchMaterial
 import java.net.NetworkInterface
 import java.util.Collections
 
@@ -32,9 +34,16 @@ class MainActivity : AppCompatActivity() {
         "77.88.8.8",
         "77.88.8.1"
     )
+    private val dohSuggestions = listOf(
+        "common.dot.dns.yandex.net"
+    )
 
     private lateinit var statusView: TextView
+    private lateinit var transportSwitch: SwitchMaterial
+    private lateinit var serverLabel: TextView
     private lateinit var serverView: AutoCompleteTextView
+    private lateinit var dohLabel: TextView
+    private lateinit var dohView: AutoCompleteTextView
     private lateinit var domainView: EditText
     private lateinit var passwordView: EditText
     private lateinit var optionsView: EditText
@@ -74,7 +83,11 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         statusView = findViewById(R.id.statusText)
+        transportSwitch = findViewById(R.id.transportSwitch)
+        serverLabel = findViewById(R.id.serverLabel)
         serverView = findViewById(R.id.serverInput)
+        dohLabel = findViewById(R.id.dohLabel)
+        dohView = findViewById(R.id.dohInput)
         domainView = findViewById(R.id.domainInput)
         passwordView = findViewById(R.id.passwordInput)
         optionsView = findViewById(R.id.optionsInput)
@@ -91,19 +104,18 @@ class MainActivity : AppCompatActivity() {
                 resolverSuggestions
             )
         )
-        serverView.threshold = 0
-        serverView.setOnClickListener { serverView.showDropDown() }
-        serverView.setOnFocusChangeListener { _, hasFocus ->
-            if (hasFocus) {
-                serverView.showDropDown()
-            }
-        }
-        serverView.setOnTouchListener { _, _ ->
-            serverView.showDropDown()
-            false
-        }
+        dohView.setAdapter(
+            ArrayAdapter(
+                this,
+                android.R.layout.simple_dropdown_item_1line,
+                dohSuggestions
+            )
+        )
+        configureDropdown(serverView)
+        configureDropdown(dohView)
 
         restoreInputs()
+        updateTransportUi(transportSwitch.isChecked)
         status("Idle.")
         appendLog("Connect uses Android VpnService, not root.")
         appendLog("Server is optional. If blank, the app tries the active network's DNS resolver.")
@@ -122,6 +134,9 @@ class MainActivity : AppCompatActivity() {
         collectNetworkButton.setOnClickListener { collectNetworkSnapshot() }
         clearLogButton.setOnClickListener { clearLog() }
         logView.setOnClickListener { copyLogToClipboard() }
+        transportSwitch.setOnCheckedChangeListener { _, isChecked ->
+            updateTransportUi(isChecked)
+        }
     }
 
     override fun onDestroy() {
@@ -150,7 +165,9 @@ class MainActivity : AppCompatActivity() {
     private fun startVpnService() {
         val intent = Intent(this, IodineVpnService::class.java).apply {
             action = IodineVpnService.ACTION_CONNECT
+            putExtra(IodineVpnService.EXTRA_USE_DOH, transportSwitch.isChecked)
             putExtra(IodineVpnService.EXTRA_SERVER, serverView.text.toString().trim())
+            putExtra(IodineVpnService.EXTRA_DOH_SERVER, dohView.text.toString().trim())
             putExtra(IodineVpnService.EXTRA_DOMAIN, domainView.text.toString().trim())
             putExtra(IodineVpnService.EXTRA_PASSWORD, passwordView.text.toString())
             putExtra(IodineVpnService.EXTRA_OPTIONS, optionsView.text.toString().trim())
@@ -170,7 +187,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun restoreInputs() {
+        transportSwitch.isChecked = prefs.getBoolean(KEY_USE_DOH, false)
         serverView.setText(prefs.getString(KEY_SERVER, "").orEmpty())
+        dohView.setText(prefs.getString(KEY_DOH_SERVER, "").orEmpty())
 
         if (prefs.contains(KEY_DOMAIN)) {
             domainView.setText(prefs.getString(KEY_DOMAIN, "").orEmpty())
@@ -189,11 +208,34 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveInputs() {
         prefs.edit()
+            .putBoolean(KEY_USE_DOH, transportSwitch.isChecked)
             .putString(KEY_SERVER, serverView.text.toString().trim())
+            .putString(KEY_DOH_SERVER, dohView.text.toString().trim())
             .putString(KEY_DOMAIN, domainView.text.toString().trim())
             .putString(KEY_PASSWORD, passwordView.text.toString())
             .putString(KEY_OPTIONS, optionsView.text.toString().trim())
             .apply()
+    }
+
+    private fun updateTransportUi(useDoh: Boolean) {
+        serverLabel.isVisible = !useDoh
+        serverView.isVisible = !useDoh
+        dohLabel.isVisible = useDoh
+        dohView.isVisible = useDoh
+    }
+
+    private fun configureDropdown(view: AutoCompleteTextView) {
+        view.threshold = 0
+        view.setOnClickListener { view.showDropDown() }
+        view.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                view.showDropDown()
+            }
+        }
+        view.setOnTouchListener { _, _ ->
+            view.showDropDown()
+            false
+        }
     }
 
     private fun collectNetworkSnapshot() {
@@ -281,7 +323,9 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val PREFS_NAME = "iodine_prefs"
+        private const val KEY_USE_DOH = "use_doh"
         private const val KEY_SERVER = "server"
+        private const val KEY_DOH_SERVER = "doh_server"
         private const val KEY_DOMAIN = "domain"
         private const val KEY_PASSWORD = "password"
         private const val KEY_OPTIONS = "options"

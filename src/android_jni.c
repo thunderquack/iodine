@@ -198,6 +198,7 @@ Java_se_kryo_iodine_IodineVpnService_nativeHandshake(JNIEnv *env, jobject thiz,
 	char *options_copy = NULL;
 	struct sockaddr_storage nameservaddr;
 	int nameservaddr_len;
+	int dns_family;
 	char *errormsg = NULL;
 
 	(void) thiz;
@@ -207,8 +208,8 @@ Java_se_kryo_iodine_IodineVpnService_nativeHandshake(JNIEnv *env, jobject thiz,
 	password_copy = copy_jstring(env, password);
 	options_copy = copy_jstring(env, options);
 
-	if (resolver_copy == NULL || domain_copy == NULL || password_copy == NULL) {
-		emit_log("Missing resolver, domain, or password.");
+	if (domain_copy == NULL || password_copy == NULL) {
+		emit_log("Missing domain or password.");
 		goto fail;
 	}
 
@@ -216,10 +217,17 @@ Java_se_kryo_iodine_IodineVpnService_nativeHandshake(JNIEnv *env, jobject thiz,
 	android_vpn_set_enabled(1);
 	parse_options(options_copy);
 
-	nameservaddr_len = get_addr(resolver_copy, DNS_PORT, nameserv_family, 0, &nameservaddr);
-	if (nameservaddr_len < 0) {
-		emit_log("Failed to resolve nameserver.");
-		goto fail;
+	if (client_get_doh_url() == NULL) {
+		if (resolver_copy == NULL || resolver_copy[0] == '\0') {
+			emit_log("Missing resolver.");
+			goto fail;
+		}
+
+		nameservaddr_len = get_addr(resolver_copy, DNS_PORT, nameserv_family, 0, &nameservaddr);
+		if (nameservaddr_len < 0) {
+			emit_log("Failed to resolve nameserver.");
+			goto fail;
+		}
 	}
 
 	if (check_topdomain(domain_copy, 0, &errormsg)) {
@@ -227,13 +235,16 @@ Java_se_kryo_iodine_IodineVpnService_nativeHandshake(JNIEnv *env, jobject thiz,
 		goto fail;
 	}
 
-	client_set_nameserver(&nameservaddr, nameservaddr_len);
+	if (client_get_doh_url() == NULL)
+		client_set_nameserver(&nameservaddr, nameservaddr_len);
 	client_set_topdomain(domain_copy);
 	memset(password_buf, 0, sizeof(password_buf));
 	strncpy(password_buf, password_copy, sizeof(password_buf) - 1);
 	client_set_password(password_buf);
 
-	dns_fd = open_dns_from_host(NULL, 0, nameservaddr.ss_family, AI_PASSIVE);
+	dns_family = (client_get_doh_url() == NULL) ? nameservaddr.ss_family :
+		((nameserv_family == AF_UNSPEC) ? AF_INET : nameserv_family);
+	dns_fd = open_dns_from_host(NULL, 0, dns_family, AI_PASSIVE);
 	if (dns_fd < 0) {
 		emit_log("Failed to open client UDP socket.");
 		goto fail;

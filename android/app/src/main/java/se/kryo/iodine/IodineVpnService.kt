@@ -60,12 +60,34 @@ class IodineVpnService : VpnService() {
             return
         }
 
+        val useDoh = intent.getBooleanExtra(EXTRA_USE_DOH, false)
         val resolver = intent.getStringExtra(EXTRA_SERVER)?.trim().orEmpty()
+        val dohServer = intent.getStringExtra(EXTRA_DOH_SERVER)?.trim().orEmpty()
         val domain = intent.getStringExtra(EXTRA_DOMAIN)?.trim().orEmpty()
         val password = intent.getStringExtra(EXTRA_PASSWORD).orEmpty()
         val options = intent.getStringExtra(EXTRA_OPTIONS)?.trim().orEmpty()
 
         worker = Thread {
+            if (useDoh) {
+                val dohUrl = normalizeDohUrl(dohServer)
+                if (dohUrl == null) {
+                    broadcastStatus(status = "Missing DoH server.", log = "Enter a DoH host or URL before connecting.")
+                    worker = null
+                    return@Thread
+                }
+
+                broadcastStatus(log = "Using DoH endpoint $dohUrl")
+                broadcastStatus(status = "Handshaking.", log = "Running iodine handshake over DoH.")
+                if (!nativeHandshake("", domain, password, appendDohOption(options, dohUrl))) {
+                    broadcastStatus(status = "Handshake failed.", log = "DoH handshake failed.")
+                    worker = null
+                    return@Thread
+                }
+
+                establishTunnel()
+                return@Thread
+            }
+
             val resolvers = resolverCandidates(resolver)
             if (resolvers.isEmpty()) {
                 broadcastStatus(
@@ -100,42 +122,48 @@ class IodineVpnService : VpnService() {
                 return@Thread
             }
 
-            val clientIp = nativeGetClientIp()
-            val serverIp = nativeGetServerIp()
-            val netmask = nativeGetNetmask()
-            val mtu = nativeGetMtu()
-
-            broadcastStatus(
-                status = "Establishing VPN.",
-                log = "Client IP $clientIp, server IP $serverIp, mtu $mtu, prefix $netmask"
-            )
-
-            val builder = Builder()
-                .setSession("Iodine")
-                .setMtu(mtu)
-                .addAddress(clientIp, netmask)
-                .addRoute("0.0.0.0", 0)
-
-            builder.addDnsServer(effectiveResolver)
-
-            tunInterface = builder.establish()
-
-            val tunFd = tunInterface?.detachFd()
-            if (tunFd == null) {
-                broadcastStatus(status = "VPN establish failed.")
-                nativeStop()
-                worker = null
-                return@Thread
-            }
-
-            broadcastStatus(status = "Connected.")
-            nativeRunTunnel(tunFd)
-            tunInterface?.close()
-            tunInterface = null
-            broadcastStatus(status = "Stopped.")
-            stopSelf()
-            worker = null
+            establishTunnel(effectiveResolver)
         }.also { it.start() }
+    }
+
+    private fun establishTunnel(effectiveResolver: String? = null) {
+        val clientIp = nativeGetClientIp()
+        val serverIp = nativeGetServerIp()
+        val netmask = nativeGetNetmask()
+        val mtu = nativeGetMtu()
+
+        broadcastStatus(
+            status = "Establishing VPN.",
+            log = "Client IP $clientIp, server IP $serverIp, mtu $mtu, prefix $netmask"
+        )
+
+        val builder = Builder()
+            .setSession("Iodine")
+            .setMtu(mtu)
+            .addAddress(clientIp, netmask)
+            .addRoute("0.0.0.0", 0)
+
+        if (!effectiveResolver.isNullOrBlank()) {
+            builder.addDnsServer(effectiveResolver)
+        }
+
+        tunInterface = builder.establish()
+
+        val tunFd = tunInterface?.detachFd()
+        if (tunFd == null) {
+            broadcastStatus(status = "VPN establish failed.")
+            nativeStop()
+            worker = null
+            return
+        }
+
+        broadcastStatus(status = "Connected.")
+        nativeRunTunnel(tunFd)
+        tunInterface?.close()
+        tunInterface = null
+        broadcastStatus(status = "Stopped.")
+        stopSelf()
+        worker = null
     }
 
     private fun disconnectTunnel(status: String) {
@@ -259,6 +287,28 @@ class IodineVpnService : VpnService() {
         return out.toByteArray()
     }
 
+    private fun normalizeDohUrl(value: String): String? {
+        if (value.isBlank()) {
+            return null
+        }
+
+        val trimmed = value.trim()
+        return if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
+            trimmed
+        } else {
+            "https://$trimmed/dns-query"
+        }
+    }
+
+    private fun appendDohOption(options: String, dohUrl: String): String {
+        val trimmed = options.trim()
+        return if (trimmed.isBlank()) {
+            "-U $dohUrl"
+        } else {
+            "$trimmed -U $dohUrl"
+        }
+    }
+
     private fun broadcastStatus(status: String? = null, log: String? = null) {
         val intent = Intent(ACTION_STATUS).setPackage(packageName)
         if (status != null) {
@@ -276,6 +326,8 @@ class IodineVpnService : VpnService() {
         const val ACTION_STATUS = "se.kryo.iodine.action.STATUS"
 
         const val EXTRA_SERVER = "server"
+        const val EXTRA_USE_DOH = "use_doh"
+        const val EXTRA_DOH_SERVER = "doh_server"
         const val EXTRA_DOMAIN = "domain"
         const val EXTRA_PASSWORD = "password"
         const val EXTRA_OPTIONS = "options"

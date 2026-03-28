@@ -3,8 +3,11 @@
     <string name="app_name">Iodine</string>
     <string name="status_idle">Idle</string>
     <string name="status_label">Status</string>
+    <string name="transport_switch_label">Use DoH instead of classic DNS</string>
     <string name="server_label">Server / Resolver</string>
     <string name="server_hint">Server or resolver, optional, for example: 8.8.8.8</string>
+    <string name="doh_label">DoH Server</string>
+    <string name="doh_hint">DoH host or URL, for example: common.dot.dns.yandex.net</string>
     <string name="domain_label">Delegated Domain</string>
     <string name="domain_hint">Delegated domain, for example: t1.example.com</string>
     <string name="password_label">Password</string>
