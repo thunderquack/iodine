@@ -107,9 +107,8 @@ class IodineVpnService : VpnService() {
                     return@Thread
                 }
 
-                val vpnDnsServer = resolverCandidates(resolver).firstOrNull() ?: DEFAULT_VPN_DNS
-                broadcastStatus(log = "Using VPN DNS server $vpnDnsServer inside the tunnel.")
-                establishTunnel(vpnDnsServer)
+                broadcastStatus(log = "Using VPN DNS server $DEFAULT_VPN_DNS inside the tunnel.")
+                establishTunnel(DEFAULT_VPN_DNS)
                 return@Thread
             }
 
@@ -147,7 +146,8 @@ class IodineVpnService : VpnService() {
                 return@Thread
             }
 
-            establishTunnel(effectiveResolver)
+            broadcastStatus(log = "Using VPN DNS server $DEFAULT_VPN_DNS inside the tunnel.")
+            establishTunnel(DEFAULT_VPN_DNS)
         }.also { it.start() }
     }
 
