@@ -2627,19 +2627,24 @@ client_handshake(int dns_fd, int raw_mode, int autodetect_frag_size, int fragsiz
 			dnsc_use_edns0 = 0;
 		}
 
-		upcodec = handshake_upenc_autodetect(dns_fd);
-		if (!running)
-			return -1;
+		if (doh_url != NULL) {
+			fprintf(stderr, "Keeping upstream codec Base32 for DoH transport\n");
+			client_debugf("Handshake stage: keeping upstream codec Base32 for DoH transport");
+		} else {
+			upcodec = handshake_upenc_autodetect(dns_fd);
+			if (!running)
+				return -1;
 
-		if (upcodec == 1) {
-			handshake_switch_codec(dns_fd, 6);
-		} else if (upcodec == 2) {
-			handshake_switch_codec(dns_fd, 26);
-		} else if (upcodec == 3) {
-			handshake_switch_codec(dns_fd, 7);
+			if (upcodec == 1) {
+				handshake_switch_codec(dns_fd, 6);
+			} else if (upcodec == 2) {
+				handshake_switch_codec(dns_fd, 26);
+			} else if (upcodec == 3) {
+				handshake_switch_codec(dns_fd, 7);
+			}
+			if (!running)
+				return -1;
 		}
-		if (!running)
-			return -1;
 
 		if (downenc == ' ') {
 			downenc = handshake_downenc_autodetect(dns_fd);
