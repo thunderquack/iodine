@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -256,6 +257,16 @@ Java_se_kryo_iodine_IodineVpnService_nativeHandshake(JNIEnv *env, jobject thiz,
 
 	emit_log("Running iodine handshake.");
 	if (client_handshake(dns_fd, raw_mode, autodetect_frag_size, max_downstream_frag_size)) {
+		if (client_get_doh_url() != NULL) {
+			if (errno == ENOSYS) {
+				emit_log("DoH is not compiled into this Android build yet.");
+			} else if (errno != 0) {
+				char errmsg[256];
+				snprintf(errmsg, sizeof(errmsg),
+					 "DoH handshake failed: %s", strerror(errno));
+				emit_log(errmsg);
+			}
+		}
 		emit_log("Handshake failed.");
 		goto fail;
 	}

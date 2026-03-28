@@ -2382,7 +2382,8 @@ client_handshake(int dns_fd, int raw_mode, int autodetect_frag_size, int fragsiz
 	resolver_close();
 	if (doh_url != NULL) {
 		if (resolver_init_doh(doh_url) != 0) {
-			warnx("Failed to initialize DoH transport for %s", doh_url);
+			warnx("Failed to initialize DoH transport for %s: %s",
+			      doh_url, strerror(errno));
 			return 1;
 		}
 		if (raw_mode) {
