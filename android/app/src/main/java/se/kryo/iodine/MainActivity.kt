@@ -25,8 +25,10 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import com.google.android.material.switchmaterial.SwitchMaterial
 import java.net.HttpURLConnection
-import java.net.URL
+import java.net.InetAddress
 import java.net.NetworkInterface
+import java.net.URL
+import java.util.concurrent.TimeUnit
 import java.util.Collections
 
 class MainActivity : AppCompatActivity() {
@@ -300,12 +302,43 @@ class MainActivity : AppCompatActivity() {
         status("Running HTTP probe.")
         Thread {
             val targets = listOf(
+                "http://1.1.1.1",
                 "https://one.one.one.one",
-                "https://example.com"
+                "https://example.com",
+                "http://neverssl.com"
             )
 
             for (target in targets) {
                 appendLogOnUi("HTTP probe starting: $target")
+                val host = try {
+                    URL(target).host
+                } catch (e: Exception) {
+                    appendLogOnUi("HTTP probe skipped: $target -> bad URL")
+                    continue
+                }
+
+                try {
+                    val resolved = InetAddress.getAllByName(host)
+                    appendLogOnUi(
+                        "DNS probe result: $host -> ${
+                            resolved.joinToString(", ") { it.hostAddress ?: "?" }
+                        }"
+                    )
+                } catch (e: Exception) {
+                    appendLogOnUi("DNS probe failed: $host -> ${e.message ?: e.javaClass.simpleName}")
+                }
+
+                appendLogOnUi("Ping probe: $host")
+                appendLogOnUi(runCommandProbe(listOf("/system/bin/ping", "-c", "1", "-W", "3", host), "Ping"))
+
+                appendLogOnUi("Traceroute probe: $host")
+                appendLogOnUi(
+                    runCommandProbe(
+                        listOf("/system/bin/toybox", "traceroute", "-n", "-m", "5", "-q", "1", "-w", "1", host),
+                        "Traceroute"
+                    )
+                )
+
                 try {
                     val connection = (URL(target).openConnection() as HttpURLConnection).apply {
                         connectTimeout = 5000
@@ -337,6 +370,30 @@ class MainActivity : AppCompatActivity() {
 
             runOnUiThread { status("HTTP probe finished.") }
         }.start()
+    }
+
+    private fun runCommandProbe(command: List<String>, label: String): String {
+        return try {
+            val process = ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .start()
+
+            val finished = process.waitFor(8, TimeUnit.SECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                return "$label probe failed: timeout"
+            }
+
+            val output = process.inputStream.bufferedReader().use { it.readText().trim() }
+            val summary = output.lineSequence().take(6).joinToString(" | ")
+            if (summary.isBlank()) {
+                "$label probe exit=${process.exitValue()} with no output"
+            } else {
+                "$label probe exit=${process.exitValue()}: $summary"
+            }
+        } catch (e: Exception) {
+            "$label probe failed: ${e.message ?: e.javaClass.simpleName}"
+        }
     }
 
     private fun appendLogOnUi(message: String) {
