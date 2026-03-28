@@ -153,6 +153,7 @@ int find_available_user(void)
 			users[i].authenticated = 0;
 			users[i].authenticated_raw = 0;
 			users[i].options_locked = 0;
+			users[i].raw_packet_seqno = 0;
 			users[i].last_pkt = time(NULL);
 			users[i].fragsize = 4096;
 			users[i].conn = CONN_DNS_NULL;

@@ -2068,10 +2068,11 @@ handle_raw_data(char *packet, int len, struct query *q, struct dnsfd *dns_fds, i
 	users[userid].inpacket.offset = 0;
 	memcpy(users[userid].inpacket.data, packet, len);
 	users[userid].inpacket.len = len;
+	users[userid].raw_packet_seqno++;
 
 	if (debug >= 1) {
-		debug_log_stderr("IN   pkt raw, total %d, from user %d\n",
-			users[userid].inpacket.len, userid);
+		debug_log_stderr("IN   pkt raw# %u, total %d, from user %d\n",
+			users[userid].raw_packet_seqno, users[userid].inpacket.len, userid);
 	}
 
 	handle_full_packet(tun_fd, dns_fds, userid);

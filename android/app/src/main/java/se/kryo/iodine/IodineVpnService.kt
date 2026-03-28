@@ -107,7 +107,9 @@ class IodineVpnService : VpnService() {
                     return@Thread
                 }
 
-                establishTunnel()
+                val vpnDnsServer = resolverCandidates(resolver).firstOrNull() ?: DEFAULT_VPN_DNS
+                broadcastStatus(log = "Using VPN DNS server $vpnDnsServer inside the tunnel.")
+                establishTunnel(vpnDnsServer)
                 return@Thread
             }
 
@@ -356,6 +358,7 @@ class IodineVpnService : VpnService() {
         const val EXTRA_STATUS = "status"
         const val EXTRA_LOG = "log"
         private const val PROBE_TIMEOUT_MS = 1500
+        private const val DEFAULT_VPN_DNS = "8.8.8.8"
 
         init {
             System.loadLibrary("iodine_android")
