@@ -215,6 +215,89 @@ debug_print_reply_prefix(const char *stage, const char *buf, int len)
 }
 
 static void
+debug_log_ip_packet(const char *stage, const char *buf, int len)
+{
+	const unsigned char *pkt = (const unsigned char *) buf;
+	unsigned int ipver;
+	unsigned int ihl;
+	char summary[256];
+
+	if (len < 5) {
+		client_debugf("%s: short packet len=%d", stage, len);
+		return;
+	}
+
+	/* Most client paths carry a 4-byte pseudo header before the IP packet. */
+	pkt += 4;
+	len -= 4;
+	if (len <= 0) {
+		client_debugf("%s: no IP payload after pseudo header", stage);
+		return;
+	}
+
+	ipver = pkt[0] >> 4;
+	if (ipver == 4) {
+		unsigned int proto;
+		unsigned int src_port = 0;
+		unsigned int dst_port = 0;
+
+		if (len < 20) {
+			client_debugf("%s: short IPv4 packet len=%d", stage, len);
+			return;
+		}
+
+		ihl = (pkt[0] & 0x0f) * 4;
+		if (ihl < 20 || len < (int) ihl) {
+			client_debugf("%s: invalid IPv4 IHL=%u len=%d", stage, ihl, len);
+			return;
+		}
+
+		proto = pkt[9];
+		if ((proto == 6 || proto == 17) && len >= (int) (ihl + 4)) {
+			src_port = ((unsigned int) pkt[ihl] << 8) | pkt[ihl + 1];
+			dst_port = ((unsigned int) pkt[ihl + 2] << 8) | pkt[ihl + 3];
+		}
+
+		snprintf(summary, sizeof(summary),
+			"%s: IPv4 proto=%u %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u ip_len=%d",
+			stage,
+			proto,
+			pkt[12], pkt[13], pkt[14], pkt[15], src_port,
+			pkt[16], pkt[17], pkt[18], pkt[19], dst_port,
+			len);
+		client_debugf("%s", summary);
+		return;
+	}
+
+	if (ipver == 6) {
+		unsigned int next_header;
+		unsigned int payload_len;
+		unsigned int src_port = 0;
+		unsigned int dst_port = 0;
+
+		if (len < 40) {
+			client_debugf("%s: short IPv6 packet len=%d", stage, len);
+			return;
+		}
+
+		next_header = pkt[6];
+		payload_len = ((unsigned int) pkt[4] << 8) | pkt[5];
+		if ((next_header == 6 || next_header == 17) && len >= 44) {
+			src_port = ((unsigned int) pkt[40] << 8) | pkt[41];
+			dst_port = ((unsigned int) pkt[42] << 8) | pkt[43];
+		}
+
+		snprintf(summary, sizeof(summary),
+			"%s: IPv6 next=%u payload_len=%u src_port=%u dst_port=%u",
+			stage, next_header, payload_len, src_port, dst_port);
+		client_debugf("%s", summary);
+		return;
+	}
+
+	client_debugf("%s: unknown IP version=%u len=%d", stage, ipver, len);
+}
+
+static void
 handshake_reply_cache_clear(void)
 {
 	memset(handshake_reply_cache, 0, sizeof(handshake_reply_cache));
@@ -965,7 +1048,11 @@ read_dns_withq(int dns_fd, int tun_fd, char *buf, int buflen, struct query *q)
 		r -= RAW_HDR_LEN;
 		datalen = sizeof(buf);
 		if (uncompress((uint8_t*)buf, &datalen, (uint8_t*) &data[RAW_HDR_LEN], r) == Z_OK) {
-			write_tun(tun_fd, buf, datalen);
+			debug_log_ip_packet("Tunnel raw downstream write", buf, (int) datalen);
+			if (write_tun(tun_fd, buf, datalen) != 0)
+				client_debugf("Tunnel raw downstream write failed: len=%lu", datalen);
+			else
+				client_debugf("Tunnel raw downstream write ok: len=%lu", datalen);
 		}
 
 		/* don't process any further */
@@ -1332,7 +1419,13 @@ tunnel_dns(int tun_fd, int dns_fd)
 			/* RE-USES buf[] */
 			datalen = sizeof(buf);
 			if (uncompress((uint8_t*)buf, &datalen, (uint8_t*) inpkt.data, inpkt.len) == Z_OK) {
-				write_tun(tun_fd, buf, datalen);
+				debug_log_ip_packet("Tunnel downstream write", buf, (int) datalen);
+				if (write_tun(tun_fd, buf, datalen) != 0)
+					client_debugf("Tunnel downstream write failed: seq=%d frag=%d len=%lu",
+						inpkt.seqno, inpkt.fragment, datalen);
+				else
+					client_debugf("Tunnel downstream write ok: seq=%d frag=%d len=%lu",
+						inpkt.seqno, inpkt.fragment, datalen);
 			}
 			inpkt.len = 0;
 			/* Keep .seqno and .fragment as is, so that we won't
