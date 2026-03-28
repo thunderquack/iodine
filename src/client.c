@@ -17,6 +17,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -56,6 +57,7 @@
 #include "resolver.h"
 #ifdef ANDROID
 #include "android_vpn.h"
+void android_jni_emit_log(const char *line);
 #endif
 
 static void handshake_lazyoff(int dns_fd);
@@ -107,6 +109,77 @@ static time_t lastdownstreamtime;
 static long send_query_sendcnt = -1;
 static long send_query_recvcnt = 0;
 static int hostname_maxlen = 0xFF;
+
+static void
+client_debugf(const char *fmt, ...)
+{
+	char line[512];
+	va_list ap;
+
+	va_start(ap, fmt);
+	vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+
+	fprintf(stderr, "%s\n", line);
+#ifdef ANDROID
+	android_jni_emit_log(line);
+#endif
+}
+
+static const char *
+debug_qtype_name(unsigned short qtype)
+{
+	switch (qtype) {
+	case T_A:
+		return "A";
+	case T_NS:
+		return "NS";
+	case T_CNAME:
+		return "CNAME";
+	case T_SOA:
+		return "SOA";
+	case T_NULL:
+		return "NULL";
+	case T_MX:
+		return "MX";
+	case T_TXT:
+		return "TXT";
+	case T_AAAA:
+		return "AAAA";
+	case T_SRV:
+		return "SRV";
+	case T_PRIVATE:
+		return "PRIVATE";
+	default:
+		return "TYPE?";
+	}
+}
+
+static void
+debug_print_reply_prefix(const char *stage, const char *buf, int len)
+{
+	char hexbuf[33];
+	char asciibuf[17];
+	int i;
+	int shown;
+
+	if (len <= 0) {
+		client_debugf("%s: no payload bytes", stage);
+		return;
+	}
+
+	shown = MIN(len, 16);
+	memset(hexbuf, 0, sizeof(hexbuf));
+	memset(asciibuf, 0, sizeof(asciibuf));
+	for (i = 0; i < shown; i++) {
+		unsigned char ch = ((const unsigned char *) buf)[i];
+		snprintf(&hexbuf[i * 2], sizeof(hexbuf) - (i * 2), "%02x", ch);
+		asciibuf[i] = isprint(ch) ? ch : '.';
+	}
+
+	client_debugf("%s: payload len=%d prefix_hex=%s prefix_ascii=\"%s\"",
+		stage, len, hexbuf, asciibuf);
+}
 
 void
 client_init(void)
@@ -707,13 +780,24 @@ handshake_waitdns(int dns_fd, char *buf, int buflen, char c1, char c2, int timeo
 		rv = read_dns_withq(dns_fd, 0, buf, buflen, &q);
 
 		if (q.id != chunkid || (q.name[0] != c1 && q.name[0] != c2)) {
-#if 0
-			fprintf(stderr, "Ignoring unfitting reply id %d starting with '%c'\n", q.id, q.name[0]);
-#endif
+			client_debugf("Handshake reply mismatch: wanted id=%u name[0]=%c/%c, got id=%u name[0]=%c type=%s rcode=%u rv=%d name=%s",
+				chunkid, c1, c2,
+				q.id,
+				q.name[0] ? q.name[0] : '?',
+				debug_qtype_name(q.type),
+				q.rcode,
+				rv,
+				q.name[0] ? q.name : "<empty>");
 			continue;
 		}
 
 		/* if still here: reply matches our latest query */
+		client_debugf("Handshake reply match: id=%u name=%s type=%s rcode=%u rv=%d",
+			q.id,
+			q.name[0] ? q.name : "<empty>",
+			debug_qtype_name(q.type),
+			q.rcode,
+			rv);
 
 		/* Non-recursive DNS servers (such as [a-m].root-servers.net)
 		   return no answer, but only additional and authority records.
@@ -746,6 +830,8 @@ handshake_waitdns(int dns_fd, char *buf, int buflen, char c1, char c2, int timeo
 			write_dns_error(&q, 1);
 			return -2;
 		}
+		if (rv > 0)
+			debug_print_reply_prefix("Handshake reply payload", buf, rv);
 		/* rv either 0 or >0, return it as is. */
 		return rv;
 	}
@@ -1405,8 +1491,11 @@ handshake_version(int dns_fd, int *seed)
 				warnx("Server full, all %d slots are taken. Try again later", payload);
 				return 1;
 			}
-		} else if (read > 0)
-			warnx("did not receive proper login challenge");
+			debug_print_reply_prefix("Version handshake unexpected payload", in, read);
+		} else if (read > 0) {
+			debug_print_reply_prefix("Version handshake short payload", in, read);
+			warnx("did not receive proper version reply");
+		}
 
 		fprintf(stderr, "Retrying version check...\n");
 	}
@@ -1462,6 +1551,7 @@ handshake_login(int dns_fd, int seed)
 					errx(4, "Failed to set IP and MTU");
 				}
 			} else {
+				debug_print_reply_prefix("Login handshake unexpected payload", in, read);
 				fprintf(stderr, "Received bad handshake\n");
 			}
 		}

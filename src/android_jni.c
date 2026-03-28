@@ -154,6 +154,14 @@ emit_log(const char *line)
 	(*env)->DeleteLocalRef(env, message);
 }
 
+void
+android_jni_emit_log(const char *line)
+{
+	if (line == NULL || line[0] == '\0')
+		return;
+	emit_log(line);
+}
+
 static void
 parse_options(char *options)
 {
