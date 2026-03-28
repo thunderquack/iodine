@@ -1124,7 +1124,8 @@ handle_null_request(int tun_fd, int dns_fd, struct dnsfd *dns_fds, struct query 
 		case 't':
 			if (q->type == T_TXT ||
 			    q->type == T_SRV || q->type == T_MX ||
-			    q->type == T_CNAME || q->type == T_A) {
+			    q->type == T_CNAME || q->type == T_A ||
+			    q->type == T_AAAA) {
 				write_dns(dns_fd, q, datap, datalen, 'T');
 				return;
 			}
@@ -1133,7 +1134,8 @@ handle_null_request(int tun_fd, int dns_fd, struct dnsfd *dns_fds, struct query 
 		case 's':
 			if (q->type == T_TXT ||
 			    q->type == T_SRV || q->type == T_MX ||
-			    q->type == T_CNAME || q->type == T_A) {
+			    q->type == T_CNAME || q->type == T_A ||
+			    q->type == T_AAAA) {
 				write_dns(dns_fd, q, datap, datalen, 'S');
 				return;
 			}
@@ -1142,7 +1144,8 @@ handle_null_request(int tun_fd, int dns_fd, struct dnsfd *dns_fds, struct query 
 		case 'u':
 			if (q->type == T_TXT ||
 			    q->type == T_SRV || q->type == T_MX ||
-			    q->type == T_CNAME || q->type == T_A) {
+			    q->type == T_CNAME || q->type == T_A ||
+			    q->type == T_AAAA) {
 				write_dns(dns_fd, q, datap, datalen, 'U');
 				return;
 			}
@@ -1151,7 +1154,8 @@ handle_null_request(int tun_fd, int dns_fd, struct dnsfd *dns_fds, struct query 
 		case 'v':
 			if (q->type == T_TXT ||
 			    q->type == T_SRV || q->type == T_MX ||
-			    q->type == T_CNAME || q->type == T_A) {
+			    q->type == T_CNAME || q->type == T_A ||
+			    q->type == T_AAAA) {
 				write_dns(dns_fd, q, datap, datalen, 'V');
 				return;
 			}
@@ -1816,6 +1820,7 @@ tunnel_dns(int tun_fd, int dns_fd, struct dnsfd *dns_fds, int bind_fd)
 		case T_PRIVATE:
 		case T_CNAME:
 		case T_A:
+		case T_AAAA:
 		case T_MX:
 		case T_SRV:
 		case T_TXT:
@@ -2281,7 +2286,7 @@ write_dns(int fd, struct query *q, const char *data, int datalen, char downenc)
 	char buf[64*1024];
 	int len = 0;
 
-	if (q->type == T_CNAME || q->type == T_A) {
+	if (q->type == T_CNAME || q->type == T_A || q->type == T_AAAA) {
 		char cnamebuf[1024];		/* max 255 */
 
 		write_dns_nameenc(cnamebuf, sizeof(cnamebuf),

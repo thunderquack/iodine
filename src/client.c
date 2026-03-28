@@ -331,6 +331,8 @@ client_set_qtype(char *qtype)
 		do_qtype = T_CNAME;
 	else if (!strcasecmp(qtype, "A"))
 		do_qtype = T_A;
+	else if (!strcasecmp(qtype, "AAAA"))
+		do_qtype = T_AAAA;
 	else if (!strcasecmp(qtype, "MX"))
 		do_qtype = T_MX;
 	else if (!strcasecmp(qtype, "SRV"))
@@ -349,6 +351,7 @@ client_get_qtype(void)
 	else if (do_qtype == T_PRIVATE)	c = "PRIVATE";
 	else if (do_qtype == T_CNAME)	c = "CNAME";
 	else if (do_qtype == T_A)	c = "A";
+	else if (do_qtype == T_AAAA)	c = "AAAA";
 	else if (do_qtype == T_MX)	c = "MX";
 	else if (do_qtype == T_SRV)	c = "SRV";
 	else if (do_qtype == T_TXT)	c = "TXT";
@@ -2068,6 +2071,7 @@ handshake_qtype_numcvt(int num)
 	case 4:	return T_MX;
 	case 5:	return T_CNAME;
 	case 6:	return T_A;
+	case 7:	return T_AAAA;
 	}
 	return T_UNSET;
 }

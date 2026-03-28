@@ -83,7 +83,7 @@ static void help(FILE *stream, bool verbose)
 		"\nOptions to try if connection doesn't work:\n"
 		"  -4 to connect only to IPv4\n"
 		"  -6 to connect only to IPv6\n"
-		"  -T force dns type: NULL, PRIVATE, TXT, SRV, MX, CNAME, A (default: autodetect)\n"
+		"  -T force dns type: NULL, PRIVATE, TXT, SRV, MX, CNAME, A, AAAA (default: autodetect)\n"
 		"  -O force downstream encoding for -T other than NULL: Base32, Base64, Base64u,\n"
 		"     Base128, or (only for TXT:) Raw  (default: autodetect)\n"
 		"  -I max interval between requests (default 4 sec) to prevent DNS timeouts\n"
