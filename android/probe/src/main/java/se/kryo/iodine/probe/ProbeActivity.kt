@@ -1,5 +1,8 @@
 package se.kryo.iodine.probe
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Bundle
 import android.util.Log
 import android.widget.TextView
@@ -26,6 +29,7 @@ class ProbeActivity : AppCompatActivity() {
         val url = intent.getStringExtra(EXTRA_URL)?.trim().orEmpty().ifEmpty { "http://neverssl.com" }
         val count = intent.getIntExtra(EXTRA_COUNT, 3).coerceIn(1, 10)
         appendLog("mode=$mode target=$target url=$url count=$count")
+        logActiveNetwork()
         executor.execute {
             when (mode) {
                 "ping" -> runPing(target, count)
@@ -37,6 +41,28 @@ class ProbeActivity : AppCompatActivity() {
                     runHttp(url)
                 }
             }
+        }
+    }
+
+    private fun logActiveNetwork() {
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val active = manager.activeNetwork
+        val capabilities = active?.let { manager.getNetworkCapabilities(it) }
+        val linkProperties = active?.let { manager.getLinkProperties(it) }
+        appendLog("network active=${active != null}")
+        if (capabilities != null) {
+            val transports = buildList {
+                if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) add("VPN")
+                if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) add("WIFI")
+                if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) add("CELLULAR")
+                if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) add("ETHERNET")
+            }
+            appendLog("network transports=${transports.joinToString(",")}")
+        }
+        if (linkProperties != null) {
+            appendLog("network iface=${linkProperties.interfaceName}")
+            val dns = linkProperties.dnsServers.joinToString(", ") { it.hostAddress ?: "?" }
+            appendLog("network dns=$dns")
         }
     }
 
