@@ -25,6 +25,58 @@ static int autodetect_frag_size = 1;
 static int max_downstream_frag_size = 3072;
 static char password_buf[33];
 
+static int
+parse_resolver_endpoint(const char *resolver, char **host_out, int *port_out)
+{
+	const char *host_start;
+	const char *port_start = NULL;
+	const char *closing_bracket;
+	char *host_copy;
+	size_t host_len;
+	long parsed_port = DNS_PORT;
+
+	if (resolver == NULL || resolver[0] == '\0')
+		return -1;
+
+	host_start = resolver;
+	if (resolver[0] == '[') {
+		closing_bracket = strchr(resolver, ']');
+		if (closing_bracket == NULL)
+			return -1;
+		host_start = resolver + 1;
+		host_len = (size_t) (closing_bracket - host_start);
+		if (closing_bracket[1] == ':')
+			port_start = closing_bracket + 2;
+	} else {
+		const char *last_colon = strrchr(resolver, ':');
+		const char *first_colon = strchr(resolver, ':');
+		if (last_colon != NULL && first_colon == last_colon) {
+			host_len = (size_t) (last_colon - resolver);
+			port_start = last_colon + 1;
+		} else {
+			host_len = strlen(resolver);
+		}
+	}
+
+	if (port_start != NULL && port_start[0] != '\0') {
+		char *endptr = NULL;
+		parsed_port = strtol(port_start, &endptr, 10);
+		if (endptr == NULL || *endptr != '\0' || parsed_port < 1 || parsed_port > 65535)
+			return -1;
+	}
+
+	host_copy = malloc(host_len + 1);
+	if (host_copy == NULL)
+		return -1;
+
+	memcpy(host_copy, host_start, host_len);
+	host_copy[host_len] = '\0';
+
+	*host_out = host_copy;
+	*port_out = (int) parsed_port;
+	return 0;
+}
+
 static char *
 copy_jstring(JNIEnv *env, jstring value)
 {
@@ -197,9 +249,11 @@ Java_se_kryo_iodine_IodineVpnService_nativeHandshake(JNIEnv *env, jobject thiz,
 	char *domain_copy = NULL;
 	char *password_copy = NULL;
 	char *options_copy = NULL;
+	char *resolver_host = NULL;
 	struct sockaddr_storage nameservaddr;
 	int nameservaddr_len;
 	int dns_family;
+	int resolver_port = DNS_PORT;
 	char *errormsg = NULL;
 
 	(void) thiz;
@@ -224,7 +278,12 @@ Java_se_kryo_iodine_IodineVpnService_nativeHandshake(JNIEnv *env, jobject thiz,
 			goto fail;
 		}
 
-		nameservaddr_len = get_addr(resolver_copy, DNS_PORT, nameserv_family, 0, &nameservaddr);
+		if (parse_resolver_endpoint(resolver_copy, &resolver_host, &resolver_port) != 0) {
+			emit_log("Failed to parse resolver address.");
+			goto fail;
+		}
+
+		nameservaddr_len = get_addr(resolver_host, resolver_port, nameserv_family, 0, &nameservaddr);
 		if (nameservaddr_len < 0) {
 			emit_log("Failed to resolve nameserver.");
 			goto fail;
@@ -273,6 +332,7 @@ Java_se_kryo_iodine_IodineVpnService_nativeHandshake(JNIEnv *env, jobject thiz,
 
 	emit_log("Handshake complete.");
 	free(resolver_copy);
+	free(resolver_host);
 	free(domain_copy);
 	free(password_copy);
 	free(options_copy);
@@ -285,6 +345,7 @@ fail:
 	}
 	android_vpn_set_enabled(0);
 	free(resolver_copy);
+	free(resolver_host);
 	free(domain_copy);
 	free(password_copy);
 	free(options_copy);

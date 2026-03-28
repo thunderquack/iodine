@@ -12,12 +12,14 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.Socket
 import java.util.Locale
 import kotlin.random.Random
 
 class IodineVpnService : VpnService() {
     private var tunInterface: ParcelFileDescriptor? = null
     private var worker: Thread? = null
+    private var dohRelay: DohRelay? = null
 
     external fun nativeAttach()
     external fun nativeDetach()
@@ -49,6 +51,7 @@ class IodineVpnService : VpnService() {
     }
 
     fun protectSocket(fd: Int): Boolean = protect(fd)
+    fun protectSocket(socket: Socket): Boolean = protect(socket)
 
     fun emitLog(line: String) {
         broadcastStatus(log = line)
@@ -77,9 +80,25 @@ class IodineVpnService : VpnService() {
                 }
 
                 broadcastStatus(log = "Using DoH endpoint $dohUrl")
+                dohRelay = try {
+                    DohRelay(this, dohUrl) { line -> broadcastStatus(log = line) }.also { relay ->
+                        relay.start()
+                        broadcastStatus(log = "DoH relay listening on 127.0.0.1:${relay.localPort}")
+                    }
+                } catch (e: Exception) {
+                    broadcastStatus(
+                        status = "DoH setup failed.",
+                        log = "Failed to start DoH relay: ${e.message ?: e.javaClass.simpleName}"
+                    )
+                    worker = null
+                    return@Thread
+                }
+
                 broadcastStatus(status = "Handshaking.", log = "Running iodine handshake over DoH.")
-                if (!nativeHandshake("", domain, password, appendDohOption(options, dohUrl))) {
+                if (!nativeHandshake("127.0.0.1:${dohRelay?.localPort}", domain, password, options)) {
                     broadcastStatus(status = "Handshake failed.", log = "DoH handshake failed.")
+                    dohRelay?.stop()
+                    dohRelay = null
                     worker = null
                     return@Thread
                 }
@@ -159,6 +178,8 @@ class IodineVpnService : VpnService() {
 
         broadcastStatus(status = "Connected.")
         nativeRunTunnel(tunFd)
+        dohRelay?.stop()
+        dohRelay = null
         tunInterface?.close()
         tunInterface = null
         broadcastStatus(status = "Stopped.")
@@ -168,6 +189,8 @@ class IodineVpnService : VpnService() {
 
     private fun disconnectTunnel(status: String) {
         nativeStop()
+        dohRelay?.stop()
+        dohRelay = null
         tunInterface?.close()
         tunInterface = null
         worker = null
@@ -297,15 +320,6 @@ class IodineVpnService : VpnService() {
             trimmed
         } else {
             "https://$trimmed/dns-query"
-        }
-    }
-
-    private fun appendDohOption(options: String, dohUrl: String): String {
-        val trimmed = options.trim()
-        return if (trimmed.isBlank()) {
-            "-U $dohUrl"
-        } else {
-            "$trimmed -U $dohUrl"
         }
     }
 
