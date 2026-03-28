@@ -220,8 +220,15 @@ class MainActivity : AppCompatActivity() {
             }
             ACTION_ADB_EXTERNAL_PROBE -> {
                 val target = intent.getStringExtra(EXTRA_PROBE_URL)?.trim().orEmpty()
+                val probePackage = intent.getStringExtra(EXTRA_PROBE_PACKAGE)?.trim().orEmpty()
                 appendLog("ADB requested external probe: ${if (target.isBlank()) DEFAULT_EXTERNAL_PROBE_URL else target}")
-                launchExternalProbe(if (target.isBlank()) DEFAULT_EXTERNAL_PROBE_URL else target)
+                if (probePackage.isNotBlank()) {
+                    appendLog("ADB requested external probe package: $probePackage")
+                }
+                launchExternalProbe(
+                    if (target.isBlank()) DEFAULT_EXTERNAL_PROBE_URL else target,
+                    probePackage.ifBlank { null }
+                )
             }
         }
     }
@@ -380,12 +387,21 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    private fun launchExternalProbe(target: String) {
+    private fun launchExternalProbe(target: String, packageName: String? = null) {
         try {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(target)).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (!packageName.isNullOrBlank()) {
+                    setPackage(packageName)
+                }
             }
-            appendLog("External probe launching browser: $target")
+            appendLog(
+                if (packageName.isNullOrBlank()) {
+                    "External probe launching browser: $target"
+                } else {
+                    "External probe launching browser: $target via $packageName"
+                }
+            )
             status("Launching external probe.")
             startActivity(intent)
         } catch (e: Exception) {
@@ -498,6 +514,7 @@ class MainActivity : AppCompatActivity() {
         const val ACTION_ADB_HTTP_PROBE = "se.kryo.iodine.action.ADB_HTTP_PROBE"
         const val ACTION_ADB_EXTERNAL_PROBE = "se.kryo.iodine.action.ADB_EXTERNAL_PROBE"
         const val EXTRA_PROBE_URL = "probe_url"
+        const val EXTRA_PROBE_PACKAGE = "probe_package"
         private const val PREFS_NAME = "iodine_prefs"
         private const val KEY_USE_DOH = "use_doh"
         private const val KEY_SERVER = "server"
