@@ -240,6 +240,10 @@ debug_log_ip_packet(const char *stage, const char *buf, int len)
 		unsigned int proto;
 		unsigned int src_port = 0;
 		unsigned int dst_port = 0;
+		unsigned int icmp_type = 0;
+		unsigned int icmp_code = 0;
+		unsigned int icmp_id = 0;
+		unsigned int icmp_seq = 0;
 
 		if (len < 20) {
 			client_debugf("%s: short IPv4 packet len=%d", stage, len);
@@ -256,15 +260,30 @@ debug_log_ip_packet(const char *stage, const char *buf, int len)
 		if ((proto == 6 || proto == 17) && len >= (int) (ihl + 4)) {
 			src_port = ((unsigned int) pkt[ihl] << 8) | pkt[ihl + 1];
 			dst_port = ((unsigned int) pkt[ihl + 2] << 8) | pkt[ihl + 3];
+		} else if (proto == 1 && len >= (int) (ihl + 8)) {
+			icmp_type = pkt[ihl];
+			icmp_code = pkt[ihl + 1];
+			icmp_id = ((unsigned int) pkt[ihl + 4] << 8) | pkt[ihl + 5];
+			icmp_seq = ((unsigned int) pkt[ihl + 6] << 8) | pkt[ihl + 7];
 		}
 
-		snprintf(summary, sizeof(summary),
-			"%s: IPv4 proto=%u %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u ip_len=%d",
-			stage,
-			proto,
-			pkt[12], pkt[13], pkt[14], pkt[15], src_port,
-			pkt[16], pkt[17], pkt[18], pkt[19], dst_port,
-			len);
+		if (proto == 1) {
+			snprintf(summary, sizeof(summary),
+				"%s: IPv4 ICMP type=%u code=%u id=%u seq=%u %u.%u.%u.%u -> %u.%u.%u.%u ip_len=%d",
+				stage,
+				icmp_type, icmp_code, icmp_id, icmp_seq,
+				pkt[12], pkt[13], pkt[14], pkt[15],
+				pkt[16], pkt[17], pkt[18], pkt[19],
+				len);
+		} else {
+			snprintf(summary, sizeof(summary),
+				"%s: IPv4 proto=%u %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u ip_len=%d",
+				stage,
+				proto,
+				pkt[12], pkt[13], pkt[14], pkt[15], src_port,
+				pkt[16], pkt[17], pkt[18], pkt[19], dst_port,
+				len);
+		}
 		client_debugf("%s", summary);
 		return;
 	}
@@ -274,6 +293,10 @@ debug_log_ip_packet(const char *stage, const char *buf, int len)
 		unsigned int payload_len;
 		unsigned int src_port = 0;
 		unsigned int dst_port = 0;
+		unsigned int icmp_type = 0;
+		unsigned int icmp_code = 0;
+		unsigned int icmp_id = 0;
+		unsigned int icmp_seq = 0;
 
 		if (len < 40) {
 			client_debugf("%s: short IPv6 packet len=%d", stage, len);
@@ -285,11 +308,22 @@ debug_log_ip_packet(const char *stage, const char *buf, int len)
 		if ((next_header == 6 || next_header == 17) && len >= 44) {
 			src_port = ((unsigned int) pkt[40] << 8) | pkt[41];
 			dst_port = ((unsigned int) pkt[42] << 8) | pkt[43];
+		} else if (next_header == 58 && len >= 48) {
+			icmp_type = pkt[40];
+			icmp_code = pkt[41];
+			icmp_id = ((unsigned int) pkt[44] << 8) | pkt[45];
+			icmp_seq = ((unsigned int) pkt[46] << 8) | pkt[47];
 		}
 
-		snprintf(summary, sizeof(summary),
-			"%s: IPv6 next=%u payload_len=%u src_port=%u dst_port=%u",
-			stage, next_header, payload_len, src_port, dst_port);
+		if (next_header == 58) {
+			snprintf(summary, sizeof(summary),
+				"%s: IPv6 ICMP type=%u code=%u id=%u seq=%u payload_len=%u",
+				stage, icmp_type, icmp_code, icmp_id, icmp_seq, payload_len);
+		} else {
+			snprintf(summary, sizeof(summary),
+				"%s: IPv6 next=%u payload_len=%u src_port=%u dst_port=%u",
+				stage, next_header, payload_len, src_port, dst_port);
+		}
 		client_debugf("%s", summary);
 		return;
 	}
@@ -1180,6 +1214,7 @@ tunnel_tun(int tun_fd, int dns_fd)
 
 	client_debugf("Tunnel tun read: %d bytes, conn=%d, sending=%d",
 		      (int) read, conn, is_sending());
+	debug_log_ip_packet("Tunnel tun read packet", in, (int) read);
 
 	outlen = sizeof(out);
 	inlen = read;
