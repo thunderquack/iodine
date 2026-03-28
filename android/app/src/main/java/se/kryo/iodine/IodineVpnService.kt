@@ -80,10 +80,6 @@ class IodineVpnService : VpnService() {
                 }
 
                 broadcastStatus(log = "Using DoH endpoint $dohUrl")
-                val dohOptions = forceNoRawMode(options)
-                if (dohOptions != options) {
-                    broadcastStatus(log = "DoH mode forces -r to keep traffic on the local DoH relay.")
-                }
                 dohRelay = try {
                     DohRelay(this, dohUrl) { line -> broadcastStatus(log = line) }.also { relay ->
                         relay.start()
@@ -99,7 +95,7 @@ class IodineVpnService : VpnService() {
                 }
 
                 broadcastStatus(status = "Handshaking.", log = "Running iodine handshake over DoH.")
-                if (!nativeHandshake("127.0.0.1:${dohRelay?.localPort}", domain, password, dohOptions)) {
+                if (!nativeHandshake("127.0.0.1:${dohRelay?.localPort}", domain, password, options)) {
                     broadcastStatus(status = "Handshake failed.", log = "DoH handshake failed.")
                     dohRelay?.stop()
                     dohRelay = null
@@ -325,23 +321,6 @@ class IodineVpnService : VpnService() {
             trimmed
         } else {
             "https://$trimmed/dns-query"
-        }
-    }
-
-    private fun forceNoRawMode(options: String): String {
-        val tokens = options
-            .split(' ', '\n', '\t', '\r')
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-
-        if (tokens.contains("-r")) {
-            return options
-        }
-
-        return if (options.isBlank()) {
-            "-r"
-        } else {
-            "$options -r"
         }
     }
 

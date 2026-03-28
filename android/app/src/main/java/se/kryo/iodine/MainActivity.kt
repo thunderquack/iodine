@@ -203,7 +203,7 @@ class MainActivity : AppCompatActivity() {
             passwordView.setText(BuildConfig.DEFAULT_PASSWORD)
         }
 
-        optionsView.setText(prefs.getString(KEY_OPTIONS, "-f").orEmpty())
+        optionsView.setText(prefs.getString(KEY_OPTIONS, DEFAULT_OPTIONS).orEmpty())
     }
 
     private fun saveInputs() {
@@ -329,5 +329,6 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_DOMAIN = "domain"
         private const val KEY_PASSWORD = "password"
         private const val KEY_OPTIONS = "options"
+        private const val DEFAULT_OPTIONS = "-f -r -T TXT -O Base32 -L 0 -M 200"
     }
 }
