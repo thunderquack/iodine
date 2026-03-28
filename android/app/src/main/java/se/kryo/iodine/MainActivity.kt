@@ -10,6 +10,7 @@ import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -217,6 +218,11 @@ class MainActivity : AppCompatActivity() {
                 appendLog("ADB requested HTTP probe.")
                 runHttpProbe()
             }
+            ACTION_ADB_EXTERNAL_PROBE -> {
+                val target = intent.getStringExtra(EXTRA_PROBE_URL)?.trim().orEmpty()
+                appendLog("ADB requested external probe: ${if (target.isBlank()) DEFAULT_EXTERNAL_PROBE_URL else target}")
+                launchExternalProbe(if (target.isBlank()) DEFAULT_EXTERNAL_PROBE_URL else target)
+            }
         }
     }
 
@@ -301,6 +307,8 @@ class MainActivity : AppCompatActivity() {
     private fun runHttpProbe() {
         status("Running HTTP probe.")
         Thread {
+            appendLogOnUi("HTTP probe note: this runs inside the VPN app process and may not reflect how external apps are routed through VpnService.")
+
             val targets = listOf(
                 "http://1.1.1.1",
                 "https://one.one.one.one",
@@ -370,6 +378,21 @@ class MainActivity : AppCompatActivity() {
 
             runOnUiThread { status("HTTP probe finished.") }
         }.start()
+    }
+
+    private fun launchExternalProbe(target: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(target)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            appendLog("External probe launching browser: $target")
+            status("Launching external probe.")
+            startActivity(intent)
+        } catch (e: Exception) {
+            val reason = e.message ?: e.javaClass.simpleName
+            appendLog("External probe failed to launch: $target -> $reason")
+            status("External probe launch failed.")
+        }
     }
 
     private fun runCommandProbe(command: List<String>, label: String): String {
@@ -473,6 +496,8 @@ class MainActivity : AppCompatActivity() {
         const val ACTION_ADB_CONNECT = "se.kryo.iodine.action.ADB_CONNECT"
         const val ACTION_ADB_DISCONNECT = "se.kryo.iodine.action.ADB_DISCONNECT"
         const val ACTION_ADB_HTTP_PROBE = "se.kryo.iodine.action.ADB_HTTP_PROBE"
+        const val ACTION_ADB_EXTERNAL_PROBE = "se.kryo.iodine.action.ADB_EXTERNAL_PROBE"
+        const val EXTRA_PROBE_URL = "probe_url"
         private const val PREFS_NAME = "iodine_prefs"
         private const val KEY_USE_DOH = "use_doh"
         private const val KEY_SERVER = "server"
@@ -481,5 +506,6 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_PASSWORD = "password"
         private const val KEY_OPTIONS = "options"
         private const val DEFAULT_OPTIONS = "-f -r -T CNAME -O Base32 -L 0 -m 200 -M 200"
+        private const val DEFAULT_EXTERNAL_PROBE_URL = "http://neverssl.com"
     }
 }
