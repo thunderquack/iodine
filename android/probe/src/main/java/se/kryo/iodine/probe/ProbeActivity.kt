@@ -50,6 +50,10 @@ class ProbeActivity : AppCompatActivity() {
         val capabilities = active?.let { manager.getNetworkCapabilities(it) }
         val linkProperties = active?.let { manager.getLinkProperties(it) }
         appendLog("network active=${active != null}")
+        if (active != null) {
+            val bound = manager.bindProcessToNetwork(active)
+            appendLog("network bindProcessToNetwork=$bound")
+        }
         if (capabilities != null) {
             val transports = buildList {
                 if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) add("VPN")
