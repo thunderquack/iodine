@@ -111,6 +111,17 @@ static long send_query_recvcnt = 0;
 static int hostname_maxlen = 0xFF;
 static int handshake_timeout_multiplier = 1;
 
+#define HANDSHAKE_REPLY_CACHE_SIZE 16
+struct handshake_reply_cache_entry {
+	int valid;
+	int rv;
+	int datalen;
+	struct query q;
+	char data[4096];
+};
+static struct handshake_reply_cache_entry handshake_reply_cache[HANDSHAKE_REPLY_CACHE_SIZE];
+static int handshake_reply_cache_next = 0;
+
 static void
 client_debugf(const char *fmt, ...)
 {
@@ -182,6 +193,57 @@ debug_print_reply_prefix(const char *stage, const char *buf, int len)
 		stage, len, hexbuf, asciibuf);
 }
 
+static void
+handshake_reply_cache_clear(void)
+{
+	memset(handshake_reply_cache, 0, sizeof(handshake_reply_cache));
+	handshake_reply_cache_next = 0;
+}
+
+static void
+handshake_reply_cache_store(struct query *q, int rv, const char *buf)
+{
+	struct handshake_reply_cache_entry *entry;
+
+	entry = &handshake_reply_cache[handshake_reply_cache_next];
+	handshake_reply_cache_next =
+		(handshake_reply_cache_next + 1) % HANDSHAKE_REPLY_CACHE_SIZE;
+
+	memset(entry, 0, sizeof(*entry));
+	entry->valid = 1;
+	entry->rv = rv;
+	entry->q = *q;
+	if (rv > 0 && buf != NULL) {
+		entry->datalen = MIN(rv, (int) sizeof(entry->data));
+		memcpy(entry->data, buf, entry->datalen);
+	}
+}
+
+static int
+handshake_reply_cache_take(uint16_t wanted_id, char c1, char c2,
+			   struct query *q_out, char *buf, int buflen)
+{
+	int i;
+
+	for (i = 0; i < HANDSHAKE_REPLY_CACHE_SIZE; i++) {
+		struct handshake_reply_cache_entry *entry = &handshake_reply_cache[i];
+		if (!entry->valid)
+			continue;
+		if (entry->q.id != wanted_id)
+			continue;
+		if (entry->q.name[0] != c1 && entry->q.name[0] != c2)
+			continue;
+
+		*q_out = entry->q;
+		if (entry->rv > 0 && buf != NULL && buflen > 0)
+			memcpy(buf, entry->data, MIN(entry->datalen, buflen));
+		entry->valid = 0;
+		return entry->rv;
+	}
+
+	return -9999;
+}
+
 void
 client_init(void)
 {
@@ -202,6 +264,7 @@ client_init(void)
 	inpkt.seqno = 0;
 	inpkt.fragment = 0;
 	handshake_timeout_multiplier = 1;
+	handshake_reply_cache_clear();
 }
 
 void
@@ -776,6 +839,20 @@ handshake_waitdns(int dns_fd, char *buf, int buflen, char c1, char c2, int timeo
 	struct query q;
 	int r, rv;
 	int effective_timeout;
+
+	rv = handshake_reply_cache_take(chunkid, c1, c2, &q, buf, buflen);
+	if (rv != -9999) {
+		client_debugf("Handshake reply cache hit: id=%u name=%s type=%s rcode=%u rv=%d",
+			q.id,
+			q.name[0] ? q.name : "<empty>",
+			debug_qtype_name(q.type),
+			q.rcode,
+			rv);
+		if (rv > 0)
+			debug_print_reply_prefix("Handshake cached payload", buf, rv);
+		return rv;
+	}
+
 	while (1) {
 		effective_timeout = timeout * handshake_timeout_multiplier;
 		r = resolver_poll(effective_timeout);
@@ -790,6 +867,7 @@ handshake_waitdns(int dns_fd, char *buf, int buflen, char c1, char c2, int timeo
 		rv = read_dns_withq(dns_fd, 0, buf, buflen, &q);
 
 		if (q.id != chunkid || (q.name[0] != c1 && q.name[0] != c2)) {
+			handshake_reply_cache_store(&q, rv, rv > 0 ? buf : NULL);
 			client_debugf("Handshake reply mismatch: wanted id=%u name[0]=%c/%c, got id=%u name[0]=%c type=%s rcode=%u rv=%d name=%s",
 				chunkid, c1, c2,
 				q.id,
