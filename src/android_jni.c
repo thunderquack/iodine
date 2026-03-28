@@ -174,6 +174,7 @@ parse_options(char *options)
 	client_set_lazymode(1);
 	client_set_selecttimeout(4);
 	client_set_hostname_maxlen(0xFF);
+	client_set_handshake_timeout_multiplier(1);
 	client_set_doh_url(NULL);
 
 	if (options == NULL)
@@ -296,6 +297,11 @@ Java_se_kryo_iodine_IodineVpnService_nativeHandshake(JNIEnv *env, jobject thiz,
 			emit_log("Failed to resolve nameserver.");
 			goto fail;
 		}
+	}
+
+	if (resolver_copy != NULL && strncmp(resolver_copy, "127.0.0.1:", 10) == 0) {
+		client_set_handshake_timeout_multiplier(5);
+		emit_log("Using extended handshake timeouts for local DoH relay.");
 	}
 
 	if (check_topdomain(domain_copy, 0, &errormsg)) {

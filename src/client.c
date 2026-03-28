@@ -109,6 +109,7 @@ static time_t lastdownstreamtime;
 static long send_query_sendcnt = -1;
 static long send_query_recvcnt = 0;
 static int hostname_maxlen = 0xFF;
+static int handshake_timeout_multiplier = 1;
 
 static void
 client_debugf(const char *fmt, ...)
@@ -200,6 +201,7 @@ client_init(void)
 	inpkt.len = 0;
 	inpkt.seqno = 0;
 	inpkt.fragment = 0;
+	handshake_timeout_multiplier = 1;
 }
 
 void
@@ -323,6 +325,12 @@ client_set_hostname_maxlen(int i)
 {
 	if (i <= 0xFF)
 		hostname_maxlen = i;
+}
+
+void
+client_set_handshake_timeout_multiplier(int multiplier)
+{
+	handshake_timeout_multiplier = MAX(1, multiplier);
 }
 
 const char *
@@ -767,8 +775,10 @@ handshake_waitdns(int dns_fd, char *buf, int buflen, char c1, char c2, int timeo
 {
 	struct query q;
 	int r, rv;
+	int effective_timeout;
 	while (1) {
-		r = resolver_poll(timeout);
+		effective_timeout = timeout * handshake_timeout_multiplier;
+		r = resolver_poll(effective_timeout);
 
 		if (r < 0)
 			return -1;	/* poll error */

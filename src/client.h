@@ -35,6 +35,7 @@ void client_set_downenc(char *encoding);
 void client_set_selecttimeout(int select_timeout);
 void client_set_lazymode(int lazy_mode);
 void client_set_hostname_maxlen(int i);
+void client_set_handshake_timeout_multiplier(int multiplier);
 
 int client_handshake(int dns_fd, int raw_mode, int autodetect_frag_size,
 		     int fragsize);
