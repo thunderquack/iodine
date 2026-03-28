@@ -14,6 +14,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketException
+import java.net.SocketTimeoutException
 import javax.net.SocketFactory
 
 class DohRelay(
@@ -36,7 +37,11 @@ class DohRelay(
             ?: throw IllegalArgumentException("Invalid DoH URL: $dohUrl")
 
         endpointHost = httpUrl.host
-        resolvedAddresses = InetAddress.getAllByName(endpointHost).toList()
+        resolvedAddresses = InetAddress.getAllByName(endpointHost)
+            .sortedWith(
+                compareBy<InetAddress> { if (it.address.size == 4) 0 else 1 }
+                    .thenBy { it.hostAddress ?: "" }
+            )
         if (resolvedAddresses.isEmpty()) {
             throw IOException("Could not resolve DoH host $endpointHost")
         }
@@ -58,6 +63,9 @@ class DohRelay(
                     }
                 }
             })
+            .connectTimeout(CONNECT_TIMEOUT_MS.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+            .readTimeout(READ_TIMEOUT_MS.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+            .writeTimeout(READ_TIMEOUT_MS.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
             .build()
 
         socket = DatagramSocket(0, loopbackAddress).apply {
@@ -91,6 +99,7 @@ class DohRelay(
                 val packet = DatagramPacket(receiveBuffer, receiveBuffer.size)
                 currentSocket.receive(packet)
                 val query = packet.data.copyOf(packet.length)
+                emitLog("DoH relay query ${describeDnsQuery(query)} from ${packet.socketAddress}")
                 val response = executeDohQuery(httpUrl, query) ?: continue
 
                 val reply = DatagramPacket(
@@ -99,12 +108,15 @@ class DohRelay(
                     packet.socketAddress as InetSocketAddress
                 )
                 currentSocket.send(reply)
-            } catch (_: java.net.SocketTimeoutException) {
+                emitLog("DoH relay reply ${response.size} bytes to ${packet.socketAddress}")
+            } catch (_: SocketTimeoutException) {
                 continue
             } catch (_: SocketException) {
                 break
             } catch (e: Exception) {
-                emitLog("DoH relay error: ${e.message ?: e.javaClass.simpleName}")
+                if (!Thread.currentThread().isInterrupted) {
+                    emitLog("DoH relay error: ${e.message ?: e.javaClass.simpleName}")
+                }
             }
         }
     }
@@ -136,8 +148,40 @@ class DohRelay(
                 emitLog("DoH relay got empty response body")
                 return null
             }
+            emitLog("DoH relay HTTP/2 ${response.code}, ${body.size} bytes")
             return body
         }
+    }
+
+    private fun describeDnsQuery(query: ByteArray): String {
+        if (query.size < 12) {
+            return "len=${query.size}"
+        }
+
+        val id = ((query[0].toInt() and 0xff) shl 8) or (query[1].toInt() and 0xff)
+        var offset = 12
+        val labels = mutableListOf<String>()
+
+        while (offset < query.size) {
+            val length = query[offset].toInt() and 0xff
+            if (length == 0) {
+                offset++
+                break
+            }
+            offset++
+            if (offset + length > query.size) {
+                return "id=$id len=${query.size}"
+            }
+            labels += query.copyOfRange(offset, offset + length).toString(Charsets.US_ASCII)
+            offset += length
+        }
+
+        if (offset + 4 > query.size) {
+            return "id=$id qname=${labels.joinToString(".")}"
+        }
+
+        val qtype = ((query[offset].toInt() and 0xff) shl 8) or (query[offset + 1].toInt() and 0xff)
+        return "id=$id qtype=$qtype qname=${labels.joinToString(".")}"
     }
 
     private class ProtectingSocketFactory(
@@ -167,5 +211,7 @@ class DohRelay(
     companion object {
         private const val MAX_DNS_PACKET = 4096
         private const val LOOP_TIMEOUT_MS = 1000
+        private const val CONNECT_TIMEOUT_MS = 5000
+        private const val READ_TIMEOUT_MS = 10000
     }
 }
