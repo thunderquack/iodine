@@ -961,10 +961,15 @@ tunnel_tun(int tun_fd, int dns_fd)
 	if ((read = read_tun(tun_fd, in, sizeof(in))) <= 0)
 		return -1;
 
+	client_debugf("Tunnel tun read: %d bytes, conn=%d, sending=%d",
+		      (int) read, conn, is_sending());
+
 	/* We may be here only to empty the tun device; then return -1
 	   to force continue in select loop. */
-	if (is_sending())
+	if (is_sending()) {
+		client_debugf("Tunnel tun drop: upstream send already in progress");
 		return -1;
+	}
 
 	outlen = sizeof(out);
 	inlen = read;
@@ -979,10 +984,14 @@ tunnel_tun(int tun_fd, int dns_fd)
 	outchunkresent = 0;
 
 	if (conn == CONN_DNS_NULL) {
+		client_debugf("Tunnel tun send: seq=%d fragment=%d compressed=%lu via chunked DNS",
+			      outpkt.seqno, outpkt.fragment, outlen);
 		send_chunk(dns_fd);
 
 		send_ping_soon = 0;
 	} else {
+		client_debugf("Tunnel tun send: seq=%d compressed=%lu via raw/label DNS",
+			      outpkt.seqno, outlen);
 		send_raw_data(dns_fd);
 	}
 
