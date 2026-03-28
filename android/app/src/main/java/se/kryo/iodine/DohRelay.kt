@@ -47,7 +47,7 @@ class DohRelay(
         )
 
         httpClient = OkHttpClient.Builder()
-            .protocols(listOf(Protocol.HTTP_2))
+            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
             .socketFactory(ProtectingSocketFactory(SocketFactory.getDefault(), service))
             .dns(object : Dns {
                 override fun lookup(hostname: String): List<InetAddress> {
