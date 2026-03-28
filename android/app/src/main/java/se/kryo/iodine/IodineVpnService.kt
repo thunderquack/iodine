@@ -34,16 +34,19 @@ class IodineVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        broadcastStatus(log = "IodineVpnService.onCreate")
         nativeAttach()
     }
 
     override fun onDestroy() {
+        broadcastStatus(log = "IodineVpnService.onDestroy")
         disconnectTunnel("Service destroyed.")
         nativeDetach()
         super.onDestroy()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        broadcastStatus(log = "IodineVpnService.onStartCommand action=${intent?.action}")
         when (intent?.action) {
             ACTION_CONNECT -> connectTunnel(intent)
             ACTION_DISCONNECT -> disconnectTunnel("Disconnected.")
@@ -190,6 +193,7 @@ class IodineVpnService : VpnService() {
     }
 
     private fun disconnectTunnel(status: String) {
+        broadcastStatus(log = "disconnectTunnel called: $status")
         nativeStop()
         dohRelay?.stop()
         dohRelay = null

@@ -414,6 +414,7 @@ Java_se_kryo_iodine_IodineVpnService_nativeStop(JNIEnv *env, jobject thiz)
 	(void) env;
 	(void) thiz;
 
+	emit_log("nativeStop called.");
 	client_stop();
 
 	if (dns_fd >= 0) {

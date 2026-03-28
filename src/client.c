@@ -1331,10 +1331,11 @@ client_tunnel(int tun_fd, int dns_fd)
 
 		i = select(maxfd + 1, &fds, NULL, NULL, &tv);
 
- 		if (lastdownstreamtime + 60 < time(NULL)) {
- 			warnx("No downstream data received in 60 seconds, shutting down.");
- 			running = 0;
- 		}
+		if (lastdownstreamtime + 60 < time(NULL)) {
+			client_debugf("Tunnel exit reason: no downstream data for 60 seconds.");
+			warnx("No downstream data received in 60 seconds, shutting down.");
+			running = 0;
+		}
 
 		if (running == 0)
 			break;
@@ -1342,6 +1343,7 @@ client_tunnel(int tun_fd, int dns_fd)
 		if (i < 0) {
 			if (!running)
 				break;
+			client_debugf("Tunnel exit reason: select() failed: %s", strerror(errno));
 			warn("select");
 			break;
 		}
@@ -1390,6 +1392,7 @@ client_tunnel(int tun_fd, int dns_fd)
 		}
 	}
 
+	client_debugf("Tunnel loop exiting: running=%d", running);
 	return rv;
 }
 
