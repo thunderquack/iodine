@@ -1,12 +1,13 @@
 package se.kryo.iodine
 
-import android.util.Base64
 import okhttp3.Dns
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -124,14 +125,11 @@ class DohRelay(
 
     private fun executeDohQuery(httpUrl: HttpUrl, query: ByteArray): ByteArray? {
         val client = httpClient ?: return null
-        val encodedQuery = Base64.encodeToString(
-            query,
-            Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP
-        )
         val request = Request.Builder()
-            .url(httpUrl.newBuilder().addQueryParameter("dns", encodedQuery).build())
+            .url(httpUrl)
             .header("Accept", "application/dns-message")
-            .get()
+            .header("Content-Type", "application/dns-message")
+            .post(query.toRequestBody("application/dns-message".toMediaType()))
             .build()
 
         client.newCall(request).execute().use { response ->
