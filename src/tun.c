@@ -534,7 +534,11 @@ read_tun(int tun_fd, char *buf, size_t len)
 static int
 tun_uses_header(void)
 {
-#if defined (FREEBSD) || defined (NETBSD)
+#ifdef ANDROID
+	/* Android VpnService file descriptors carry plain IP packets without
+	   the Linux TUN packet information header. */
+	return 0;
+#elif defined (FREEBSD) || defined (NETBSD)
 	/* FreeBSD/NetBSD has no header */
 	return 0;
 #elif defined (DARWIN)
