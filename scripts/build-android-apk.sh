@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="$ROOT_DIR/android"
 JNI_LIBS_DIR="$ANDROID_DIR/app/src/main/jniLibs"
 APK_RELATIVE_PATH="app/build/outputs/apk/debug/app-debug.apk"
+PROBE_APK_RELATIVE_PATH="probe/build/outputs/apk/debug/probe-debug.apk"
 APK_OUT_DIR="${APK_OUT_DIR:-}"
 ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-}"
 
@@ -38,4 +39,5 @@ gradle --no-daemon assembleDebug
 if [[ -n "$APK_OUT_DIR" ]]; then
   mkdir -p "$APK_OUT_DIR"
   cp "$ANDROID_DIR/$APK_RELATIVE_PATH" "$APK_OUT_DIR/app-debug.apk"
+  cp "$ANDROID_DIR/$PROBE_APK_RELATIVE_PATH" "$APK_OUT_DIR/probe-debug.apk"
 fi

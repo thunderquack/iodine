@@ -1,0 +1,8 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.IodineProbe" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#0F6B5B</item>
+        <item name="colorPrimaryVariant">#0B5245</item>
+        <item name="colorSecondary">#D97841</item>
+        <item name="android:statusBarColor" tools:targetApi="l">#0B5245</item>
+    </style>
+</resources>
