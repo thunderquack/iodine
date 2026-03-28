@@ -1468,7 +1468,7 @@ handshake_version(int dns_fd, int *seed)
 
 		read = handshake_waitdns(dns_fd, in, sizeof(in), 'v', 'V', i+1);
 
-		if (read >= 9) {
+		if (read >= 8) {
 			payload =  (((in[4] & 0xff) << 24) |
 					((in[5] & 0xff) << 16) |
 					((in[6] & 0xff) << 8) |
@@ -1476,7 +1476,12 @@ handshake_version(int dns_fd, int *seed)
 
 			if (strncmp("VACK", in, 4) == 0) {
 				*seed = payload;
-				userid = in[8];
+				if (read >= 9) {
+					userid = in[8];
+				} else {
+					userid = 0;
+					client_debugf("Version handshake accepted short VACK without userid byte; assuming user #0");
+				}
 				userid_char = hex[userid & 15];
 				userid_char2 = hex2[userid & 15];
 
