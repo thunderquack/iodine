@@ -69,7 +69,7 @@ static struct sockaddr_storage nameserv;
 static int nameserv_len;
 static struct sockaddr_storage raw_serv;
 static int raw_serv_len;
-static const char *topdomain;
+static char *topdomain;
 static char *doh_url;
 
 static uint16_t rand_seed;
@@ -110,6 +110,7 @@ static long send_query_sendcnt = -1;
 static long send_query_recvcnt = 0;
 static int hostname_maxlen = 0xFF;
 static int handshake_timeout_multiplier = 1;
+static int force_base32_upstream = 0;
 
 #define HANDSHAKE_REPLY_CACHE_SIZE 16
 struct handshake_reply_cache_entry {
@@ -264,6 +265,7 @@ client_init(void)
 	inpkt.seqno = 0;
 	inpkt.fragment = 0;
 	handshake_timeout_multiplier = 1;
+	force_base32_upstream = 0;
 	handshake_reply_cache_clear();
 }
 
@@ -311,7 +313,17 @@ client_get_doh_url(void)
 void
 client_set_topdomain(const char *cp)
 {
-	topdomain = cp;
+	size_t len;
+
+	free(topdomain);
+	topdomain = NULL;
+	if (cp == NULL)
+		return;
+
+	len = strlen(cp) + 1;
+	topdomain = malloc(len);
+	if (topdomain != NULL)
+		memcpy(topdomain, cp, len);
 }
 
 void
@@ -397,6 +409,12 @@ void
 client_set_handshake_timeout_multiplier(int multiplier)
 {
 	handshake_timeout_multiplier = MAX(1, multiplier);
+}
+
+void
+client_set_force_base32_upstream(int enabled)
+{
+	force_base32_upstream = enabled ? 1 : 0;
 }
 
 const char *
@@ -2627,9 +2645,9 @@ client_handshake(int dns_fd, int raw_mode, int autodetect_frag_size, int fragsiz
 			dnsc_use_edns0 = 0;
 		}
 
-		if (doh_url != NULL) {
-			fprintf(stderr, "Keeping upstream codec Base32 for DoH transport\n");
-			client_debugf("Handshake stage: keeping upstream codec Base32 for DoH transport");
+		if (force_base32_upstream) {
+			fprintf(stderr, "Keeping upstream codec Base32 for conservative transport profile\n");
+			client_debugf("Handshake stage: keeping upstream codec Base32 for conservative transport profile");
 		} else {
 			upcodec = handshake_upenc_autodetect(dns_fd);
 			if (!running)
