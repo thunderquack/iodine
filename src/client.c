@@ -1617,7 +1617,8 @@ handshake_login(int dns_fd, int seed)
 
 		if (read > 0) {
 			int netmask;
-			if (strncmp("LNAK", in, 4) == 0) {
+			if (strncmp("LNAK", in, 4) == 0 ||
+			    (read == 3 && strncmp("LNA", in, 3) == 0)) {
 				fprintf(stderr, "Bad password\n");
 				return 1;
 			} else if (strncmp("BADIP", in, 5) == 0) {
