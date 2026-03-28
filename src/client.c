@@ -61,6 +61,7 @@ void android_jni_emit_log(const char *line);
 #endif
 
 static void handshake_lazyoff(int dns_fd);
+static void reset_upstream_packet_state(void);
 
 static int running;
 static const char *password;
@@ -202,6 +203,17 @@ handshake_reply_cache_clear(void)
 }
 
 static void
+reset_upstream_packet_state(void)
+{
+	outpkt.len = 0;
+	outpkt.sentlen = 0;
+	outpkt.offset = 0;
+	outpkt.seqno = 0;
+	outpkt.fragment = 0;
+	outchunkresent = 0;
+}
+
+static void
 handshake_reply_cache_store(struct query *q, int rv, const char *buf)
 {
 	struct handshake_reply_cache_entry *entry;
@@ -257,10 +269,7 @@ client_init(void)
 	chunkid_prev = 0;
 	chunkid_prev2 = 0;
 
-	outpkt.len = 0;
-	outpkt.seqno = 0;
-	outpkt.fragment = 0;
-	outchunkresent = 0;
+	reset_upstream_packet_state();
 	inpkt.len = 0;
 	inpkt.seqno = 0;
 	inpkt.fragment = 0;
@@ -566,6 +575,10 @@ send_chunk(int fd)
 	datacmc++;
 	if (datacmc >= 36)
 		datacmc = 0;
+
+	client_debugf("Tunnel chunk send: chunkid=%u seq=%d frag=%d offset=%d sentlen=%d avail=%d",
+		      chunkid, outpkt.seqno, outpkt.fragment, outpkt.offset,
+		      outpkt.sentlen, avail);
 
 #if 0
 	fprintf(stderr, "  Send: down %d/%d up %d/%d, %d bytes\n",
@@ -1258,10 +1271,15 @@ tunnel_dns(int tun_fd, int dns_fd)
 		if (up_ack_seqno == outpkt.seqno &&
 		    up_ack_fragment == outpkt.fragment) {
 			/* Okay, previously sent fragment has arrived */
+			client_debugf("Tunnel chunk ack: chunkid=%u seq=%d frag=%d sentlen=%d offset=%d len=%d",
+				      q.id, up_ack_seqno, up_ack_fragment, outpkt.sentlen,
+				      outpkt.offset, outpkt.len);
 
 			outpkt.offset += outpkt.sentlen;
 			if (outpkt.offset >= outpkt.len) {
 				/* Packet completed */
+				client_debugf("Tunnel chunk complete: seq=%d total_len=%d",
+					      outpkt.seqno, outpkt.len);
 				outpkt.offset = 0;
 				outpkt.len = 0;
 				outpkt.sentlen = 0;
@@ -1286,6 +1304,10 @@ tunnel_dns(int tun_fd, int dns_fd)
 				send_ping_soon = 0;
 				send_something_now = 0;
 			}
+		} else {
+			client_debugf("Tunnel chunk ack mismatch: got seq=%d frag=%d expected seq=%d frag=%d qid=%u",
+				      up_ack_seqno, up_ack_fragment, outpkt.seqno,
+				      outpkt.fragment, q.id);
 		}
 		/* else: Some wrong fragment has arrived, or old fragment is
 		   acked again, mostly by ping responses.
@@ -2715,8 +2737,11 @@ client_handshake(int dns_fd, int raw_mode, int autodetect_frag_size, int fragsiz
 		if (!running)
 			return -1;
 
-		client_debugf("Handshake stage: completed successfully\n");
+	client_debugf("Handshake stage: completed successfully\n");
 	}
+
+	reset_upstream_packet_state();
+	client_debugf("Handshake stage: upstream packet state reset before tunnel loop");
 
 	return 0;
 }
