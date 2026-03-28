@@ -62,6 +62,14 @@ void android_jni_emit_log(const char *line);
 
 static void handshake_lazyoff(int dns_fd);
 static void reset_upstream_packet_state(void);
+static void send_raw_data(int dns_fd);
+static void send_chunk(int fd);
+static inline int is_sending(void);
+static void upstream_queue_clear(void);
+static int upstream_queue_push(const char *data, int len);
+static int upstream_queue_pop(char *data, int maxlen);
+static void start_upstream_packet(int dns_fd, const char *data, unsigned long outlen);
+static void maybe_send_queued_upstream(int dns_fd);
 
 static int running;
 static const char *password;
@@ -79,6 +87,17 @@ static uint16_t rand_seed;
 static struct packet outpkt;
 static struct packet inpkt;
 int outchunkresent = 0;
+
+#define UPSTREAM_QUEUE_SIZE 8
+struct upstream_queue_entry {
+	int valid;
+	int len;
+	char data[64 * 1024];
+};
+static struct upstream_queue_entry upstream_queue[UPSTREAM_QUEUE_SIZE];
+static int upstream_queue_head = 0;
+static int upstream_queue_tail = 0;
+static int upstream_queue_len = 0;
 
 /* My userid at the server */
 static char userid;
@@ -214,6 +233,103 @@ reset_upstream_packet_state(void)
 }
 
 static void
+upstream_queue_clear(void)
+{
+	memset(upstream_queue, 0, sizeof(upstream_queue));
+	upstream_queue_head = 0;
+	upstream_queue_tail = 0;
+	upstream_queue_len = 0;
+}
+
+static int
+upstream_queue_push(const char *data, int len)
+{
+	struct upstream_queue_entry *entry;
+
+	if (len <= 0)
+		return 0;
+
+	if (upstream_queue_len >= UPSTREAM_QUEUE_SIZE) {
+		client_debugf("Tunnel tun queue full: dropping compressed=%d", len);
+		return -1;
+	}
+
+	entry = &upstream_queue[upstream_queue_tail];
+	memset(entry, 0, sizeof(*entry));
+	entry->valid = 1;
+	entry->len = MIN(len, (int) sizeof(entry->data));
+	memcpy(entry->data, data, entry->len);
+
+	upstream_queue_tail = (upstream_queue_tail + 1) % UPSTREAM_QUEUE_SIZE;
+	upstream_queue_len++;
+	client_debugf("Tunnel tun queued: compressed=%d queue_len=%d",
+		      entry->len, upstream_queue_len);
+	return 0;
+}
+
+static int
+upstream_queue_pop(char *data, int maxlen)
+{
+	struct upstream_queue_entry *entry;
+	int len;
+
+	if (upstream_queue_len <= 0)
+		return 0;
+
+	entry = &upstream_queue[upstream_queue_head];
+	if (!entry->valid)
+		return 0;
+
+	len = MIN(entry->len, maxlen);
+	memcpy(data, entry->data, len);
+	memset(entry, 0, sizeof(*entry));
+	upstream_queue_head = (upstream_queue_head + 1) % UPSTREAM_QUEUE_SIZE;
+	upstream_queue_len--;
+	return len;
+}
+
+static void
+start_upstream_packet(int dns_fd, const char *data, unsigned long outlen)
+{
+	memcpy(outpkt.data, data, MIN(outlen, sizeof(outpkt.data)));
+	outpkt.sentlen = 0;
+	outpkt.offset = 0;
+	outpkt.seqno = (outpkt.seqno + 1) & 7;
+	outpkt.len = outlen;
+	outpkt.fragment = 0;
+	outchunkresent = 0;
+
+	if (conn == CONN_DNS_NULL) {
+		client_debugf("Tunnel tun send: seq=%d fragment=%d compressed=%lu via chunked DNS",
+			      outpkt.seqno, outpkt.fragment, outlen);
+		send_chunk(dns_fd);
+		send_ping_soon = 0;
+	} else {
+		client_debugf("Tunnel tun send: seq=%d compressed=%lu via raw/label DNS",
+			      outpkt.seqno, outlen);
+		send_raw_data(dns_fd);
+	}
+}
+
+static void
+maybe_send_queued_upstream(int dns_fd)
+{
+	char buf[64 * 1024];
+	int len;
+
+	if (is_sending())
+		return;
+
+	len = upstream_queue_pop(buf, sizeof(buf));
+	if (len <= 0)
+		return;
+
+	client_debugf("Tunnel tun dequeue: compressed=%d queue_len=%d",
+		      len, upstream_queue_len);
+	start_upstream_packet(dns_fd, buf, len);
+}
+
+static void
 handshake_reply_cache_store(struct query *q, int rv, const char *buf)
 {
 	struct handshake_reply_cache_entry *entry;
@@ -276,6 +392,7 @@ client_init(void)
 	handshake_timeout_multiplier = 1;
 	force_base32_upstream = 0;
 	handshake_reply_cache_clear();
+	upstream_queue_clear();
 }
 
 void
@@ -977,36 +1094,17 @@ tunnel_tun(int tun_fd, int dns_fd)
 	client_debugf("Tunnel tun read: %d bytes, conn=%d, sending=%d",
 		      (int) read, conn, is_sending());
 
-	/* We may be here only to empty the tun device; then return -1
-	   to force continue in select loop. */
-	if (is_sending()) {
-		client_debugf("Tunnel tun drop: upstream send already in progress");
-		return -1;
-	}
-
 	outlen = sizeof(out);
 	inlen = read;
 	compress2((uint8_t*)out, &outlen, (uint8_t*)in, inlen, 9);
 
-	memcpy(outpkt.data, out, MIN(outlen, sizeof(outpkt.data)));
-	outpkt.sentlen = 0;
-	outpkt.offset = 0;
-	outpkt.seqno = (outpkt.seqno + 1) & 7;
-	outpkt.len = outlen;
-	outpkt.fragment = 0;
-	outchunkresent = 0;
-
-	if (conn == CONN_DNS_NULL) {
-		client_debugf("Tunnel tun send: seq=%d fragment=%d compressed=%lu via chunked DNS",
-			      outpkt.seqno, outpkt.fragment, outlen);
-		send_chunk(dns_fd);
-
-		send_ping_soon = 0;
-	} else {
-		client_debugf("Tunnel tun send: seq=%d compressed=%lu via raw/label DNS",
-			      outpkt.seqno, outlen);
-		send_raw_data(dns_fd);
+	if (is_sending()) {
+		if (upstream_queue_push(out, outlen) < 0)
+			client_debugf("Tunnel tun drop: queue saturated");
+		return read;
 	}
+
+	start_upstream_packet(dns_fd, out, outlen);
 
 	return read;
 }
@@ -1284,6 +1382,12 @@ tunnel_dns(int tun_fd, int dns_fd)
 				outpkt.len = 0;
 				outpkt.sentlen = 0;
 				outchunkresent = 0;
+				maybe_send_queued_upstream(dns_fd);
+				if (is_sending()) {
+					send_ping_soon = 0;
+					send_something_now = 0;
+					return read;
+				}
 
 				/* Normally, server still has a query in queue,
 				   but sometimes not. So send a ping.
