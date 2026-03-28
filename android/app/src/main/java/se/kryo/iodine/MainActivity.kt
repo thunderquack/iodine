@@ -98,6 +98,10 @@ class MainActivity : AppCompatActivity() {
                 serverView.showDropDown()
             }
         }
+        serverView.setOnTouchListener { _, _ ->
+            serverView.showDropDown()
+            false
+        }
 
         restoreInputs()
         status("Idle.")

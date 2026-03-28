@@ -156,6 +156,7 @@
                 android:maxLines="2"
                 android:lines="2"
                 android:singleLine="false"
+                android:textAllCaps="false"
                 android:text="@string/collect_settings" />
 
             <Space
@@ -171,6 +172,7 @@
                 android:maxLines="2"
                 android:lines="2"
                 android:singleLine="false"
+                android:textAllCaps="false"
                 android:text="@string/clear_log" />
         </LinearLayout>
 
