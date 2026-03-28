@@ -113,6 +113,7 @@ parse_options(char *options)
 	client_set_lazymode(1);
 	client_set_selecttimeout(4);
 	client_set_hostname_maxlen(0xFF);
+	client_set_doh_url(NULL);
 
 	if (options == NULL)
 		return;
@@ -125,6 +126,10 @@ parse_options(char *options)
 			nameserv_family = AF_INET6;
 		} else if (!strcmp(token, "-r")) {
 			raw_mode = 0;
+		} else if (!strcmp(token, "-U")) {
+			token = strtok(NULL, " \t\r\n");
+			if (token != NULL)
+				client_set_doh_url(token);
 		} else if (!strcmp(token, "-m")) {
 			token = strtok(NULL, " \t\r\n");
 			if (token != NULL) {

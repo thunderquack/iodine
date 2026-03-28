@@ -52,6 +52,7 @@
 #include "tun.h"
 #include "version.h"
 #include "client.h"
+#include "resolver.h"
 #ifdef ANDROID
 #include "android_vpn.h"
 #endif
@@ -66,6 +67,7 @@ static int nameserv_len;
 static struct sockaddr_storage raw_serv;
 static int raw_serv_len;
 static const char *topdomain;
+static char *doh_url;
 
 static uint16_t rand_seed;
 
@@ -143,6 +145,28 @@ client_set_nameserver(struct sockaddr_storage *addr, int addrlen)
 {
 	memcpy(&nameserv, addr, addrlen);
 	nameserv_len = addrlen;
+}
+
+void
+client_set_doh_url(const char *cp)
+{
+	size_t len;
+
+	free(doh_url);
+	doh_url = NULL;
+	if (cp == NULL || cp[0] == '\0')
+		return;
+
+	len = strlen(cp) + 1;
+	doh_url = malloc(len);
+	if (doh_url != NULL)
+		memcpy(doh_url, cp, len);
+}
+
+const char *
+client_get_doh_url(void)
+{
+	return doh_url;
 }
 
 void
@@ -260,7 +284,10 @@ send_query(int fd, char *hostname)
 	fprintf(stderr, "  Sendquery: id %5d name[0] '%c'\n", q.id, hostname[0]);
 #endif
 
-	sendto(fd, packet, len, 0, (struct sockaddr*)&nameserv, nameserv_len);
+	if (resolver_send_packet(packet, len, selecttimeout) < 0) {
+		warn("resolver_send_packet");
+		return;
+	}
 
 	/* There are DNS relays that time out quickly but don't send anything
 	   back on timeout.
@@ -559,9 +586,8 @@ read_dns_withq(int dns_fd, int tun_fd, char *buf, int buflen, struct query *q)
 	int r;
 
 	addrlen = sizeof(from);
-	if ((r = recvfrom(dns_fd, data, sizeof(data), 0,
-			  (struct sockaddr*)&from, &addrlen)) < 0) {
-		warn("recvfrom");
+	if ((r = resolver_recv_packet(data, sizeof(data), &from, &addrlen)) < 0) {
+		warn("resolver_recv_packet");
 		return -1;
 	}
 
@@ -667,20 +693,13 @@ handshake_waitdns(int dns_fd, char *buf, int buflen, char c1, char c2, int timeo
 {
 	struct query q;
 	int r, rv;
-	fd_set fds;
-	struct timeval tv;
-
 	while (1) {
-		tv.tv_sec = timeout;
-		tv.tv_usec = 0;
-		FD_ZERO(&fds);
-		FD_SET(dns_fd, &fds);
-		r = select(dns_fd + 1, &fds, NULL, NULL, &tv);
+		r = resolver_poll(timeout);
 
 		if (r < 0)
-			return -1;	/* select error */
+			return -1;	/* poll error */
 		if (r == 0)
-			return -3;	/* select timeout */
+			return -3;	/* poll timeout */
 
 		q.id = 0;
 		q.name[0] = '\0';
@@ -1084,6 +1103,8 @@ client_tunnel(int tun_fd, int dns_fd)
 {
 	struct timeval tv;
 	fd_set fds;
+	int dns_select_fd;
+	int maxfd;
 	int rv;
 	int i;
 
@@ -1092,6 +1113,12 @@ client_tunnel(int tun_fd, int dns_fd)
 	send_query_sendcnt = 0;  /* start counting now */
 
 	while (running) {
+		if (resolver_get_transport() == RESOLVER_TRANSPORT_DOH &&
+		    resolver_has_pending()) {
+			if (tunnel_dns(tun_fd, dns_fd) <= 0)
+				continue;
+		}
+
 		tv.tv_sec = selecttimeout;
 		tv.tv_usec = 0;
 
@@ -1107,6 +1134,7 @@ client_tunnel(int tun_fd, int dns_fd)
 		}
 
 		FD_ZERO(&fds);
+		maxfd = -1;
 		if (!is_sending() || outchunkresent >= 2) {
 			/* If re-sending upstream data, chances are that
 			   we're several seconds behind already and TCP
@@ -1115,10 +1143,15 @@ client_tunnel(int tun_fd, int dns_fd)
 			   Get up-to-date fast by simply dropping stuff,
 			   that's what TCP is designed to handle. */
 			FD_SET(tun_fd, &fds);
+			maxfd = tun_fd;
 		}
-		FD_SET(dns_fd, &fds);
+		dns_select_fd = resolver_get_fd();
+		if (dns_select_fd >= 0) {
+			FD_SET(dns_select_fd, &fds);
+			maxfd = MAX(maxfd, dns_select_fd);
+		}
 
-		i = select(MAX(tun_fd, dns_fd) + 1, &fds, NULL, NULL, &tv);
+		i = select(maxfd + 1, &fds, NULL, NULL, &tv);
 
  		if (lastdownstreamtime + 60 < time(NULL)) {
  			warnx("No downstream data received in 60 seconds, shutting down.");
@@ -1172,7 +1205,7 @@ client_tunnel(int tun_fd, int dns_fd)
 				   we need to _not_ do tunnel_dns() then.
 				   If chunk sent, sets send_ping_soon=0. */
 			}
-			if (FD_ISSET(dns_fd, &fds)) {
+			if (dns_select_fd >= 0 && FD_ISSET(dns_select_fd, &fds)) {
 				if (tunnel_dns(tun_fd, dns_fd) <= 0)
 					continue;
 			}
@@ -2346,6 +2379,21 @@ client_handshake(int dns_fd, int raw_mode, int autodetect_frag_size, int fragsiz
 	int upcodec;
 	int r;
 
+	resolver_close();
+	if (doh_url != NULL) {
+		if (resolver_init_doh(doh_url) != 0) {
+			warnx("Failed to initialize DoH transport for %s", doh_url);
+			return 1;
+		}
+		if (raw_mode) {
+			fprintf(stderr, "Skipping raw mode for DoH transport\n");
+			raw_mode = 0;
+		}
+	} else if (resolver_init_udp(dns_fd, &nameserv, nameserv_len) != 0) {
+		warn("resolver_init_udp");
+		return 1;
+	}
+
 	dnsc_use_edns0 = 0;
 
 	/* qtype message printed in handshake function */
@@ -2432,4 +2480,3 @@ client_handshake(int dns_fd, int raw_mode, int autodetect_frag_size, int fragsiz
 
 	return 0;
 }
-

@@ -16,10 +16,9 @@ HEAD_COMMIT = `git rev-parse --short HEAD`
 include $(CLEAR_VARS)
 
 LOCAL_MODULE    := iodine_android
-LOCAL_SRC_FILES := tun.c dns.c read.c encoding.c login.c base32.c base64.c base64u.c base128.c md5.c common.c client.c util.c android_vpn.c android_jni.c
+LOCAL_SRC_FILES := tun.c dns.c read.c encoding.c login.c base32.c base64.c base64u.c base128.c md5.c common.c resolver.c resolver_udp.c resolver_doh.c client.c util.c android_vpn.c android_jni.c
 LOCAL_CFLAGS    := -c -DANDROID -DLINUX -DIFCONFIGPATH=\"/system/bin/\" -Wall -DGITREVISION=\"$(HEAD_COMMIT)\"
 LOCAL_LDLIBS    := -lz
 LOCAL_LDLIBS    += -llog
 
 include $(BUILD_SHARED_LIBRARY)
-

@@ -72,7 +72,7 @@ static void help(FILE *stream, bool verbose)
 {
 	fprintf(stream,
 		"iodine IP over DNS tunneling client\n\n"
-		"Usage: %s [-46fhrv] [-u user] [-t chrootdir] [-d device] [-P password]\n"
+		"Usage: %s [-46fhrv] [-u user] [-t chrootdir] [-d device] [-P password] [-U url]\n"
 		"              [-m maxfragsize] [-M maxlen] [-T type] [-O enc] [-L 0|1] [-I sec]\n"
 		"              [-z context] [-F pidfile] [nameserver] topdomain\n", __progname);
 
@@ -92,6 +92,7 @@ static void help(FILE *stream, bool verbose)
 		"  -M max size of upstream hostnames (~100-255, default: 255)\n"
 		"  -r to skip raw UDP mode attempt\n"
 		"  -P password used for authentication (max 32 chars will be used)\n\n"
+		"  -U DoH endpoint URL to use DNS-over-HTTPS transport (HTTP/2 required)\n\n"
 		"Other options:\n"
 		"  -v to print version info and exit\n"
 		"  -h to print this help and exit\n"
@@ -139,6 +140,7 @@ int main(int argc, char **argv)
 	int choice;
 	int tun_fd;
 	int dns_fd;
+	int dns_family;
 	int max_downstream_frag_size;
 	int autodetect_frag_size;
 	int retval;
@@ -192,7 +194,7 @@ int main(int argc, char **argv)
 		__progname++;
 #endif
 
-	while ((choice = getopt(argc, argv, "46vfhru:t:d:R:P:m:M:F:T:O:L:I:")) != -1) {
+	while ((choice = getopt(argc, argv, "46vfhru:t:d:R:P:m:M:F:T:O:L:I:U:")) != -1) {
 		switch(choice) {
 		case '4':
 			nameserv_family = AF_INET;
@@ -234,6 +236,9 @@ int main(int argc, char **argv)
 
 			/* XXX: find better way of cleaning up ps(1) */
 			memset(optarg, 0, strlen(optarg));
+			break;
+		case 'U':
+			client_set_doh_url(optarg);
 			break;
 		case 'm':
 			autodetect_frag_size = 0;
@@ -304,14 +309,14 @@ int main(int argc, char **argv)
 		/* NOTREACHED */
 	}
 
-	if (nameserv_host) {
+	if (client_get_doh_url() == NULL && nameserv_host) {
 		nameservaddr_len = get_addr(nameserv_host, DNS_PORT, nameserv_family, 0, &nameservaddr);
 		if (nameservaddr_len < 0) {
 			errx(1, "Cannot lookup nameserver '%s': %s ",
 				nameserv_host, gai_strerror(nameservaddr_len));
 		}
 		client_set_nameserver(&nameservaddr, nameservaddr_len);
-	} else {
+	} else if (client_get_doh_url() == NULL) {
 		warnx("No nameserver found - not connected to any network?\n");
 		usage();
 		/* NOTREACHED */
@@ -351,7 +356,11 @@ int main(int argc, char **argv)
 		retval = 1;
 		goto cleanup1;
 	}
-	if ((dns_fd = open_dns_from_host(NULL, 0, nameservaddr.ss_family, AI_PASSIVE)) < 0) {
+	dns_family = nameservaddr.ss_family;
+	if (client_get_doh_url() != NULL)
+		dns_family = (nameserv_family == AF_UNSPEC) ? AF_INET : nameserv_family;
+
+	if ((dns_fd = open_dns_from_host(NULL, 0, dns_family, AI_PASSIVE)) < 0) {
 		retval = 1;
 		goto cleanup2;
 	}
@@ -363,8 +372,13 @@ int main(int argc, char **argv)
 	signal(SIGINT, sighandler);
 	signal(SIGTERM, sighandler);
 
-	fprintf(stderr, "Sending DNS queries for %s to %s\n",
-		topdomain, format_addr(&nameservaddr, nameservaddr_len));
+	if (client_get_doh_url() != NULL) {
+		fprintf(stderr, "Sending DoH queries for %s to %s\n",
+			topdomain, client_get_doh_url());
+	} else {
+		fprintf(stderr, "Sending DNS queries for %s to %s\n",
+			topdomain, format_addr(&nameservaddr, nameservaddr_len));
+	}
 
 	if (client_handshake(dns_fd, raw_mode, autodetect_frag_size, max_downstream_frag_size)) {
 		retval = 1;
