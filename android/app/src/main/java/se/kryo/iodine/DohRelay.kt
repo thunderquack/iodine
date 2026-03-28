@@ -49,11 +49,13 @@ class DohRelay(
         httpClient = OkHttpClient.Builder()
             .protocols(listOf(Protocol.HTTP_2))
             .socketFactory(ProtectingSocketFactory(SocketFactory.getDefault(), service))
-            .dns(Dns { hostname ->
-                if (hostname.equals(endpointHost, ignoreCase = true)) {
-                    resolvedAddresses
-                } else {
-                    Dns.SYSTEM.lookup(hostname)
+            .dns(object : Dns {
+                override fun lookup(hostname: String): List<InetAddress> {
+                    return if (hostname.equals(endpointHost, ignoreCase = true)) {
+                        resolvedAddresses
+                    } else {
+                        Dns.SYSTEM.lookup(hostname)
+                    }
                 }
             })
             .build()
@@ -130,7 +132,7 @@ class DohRelay(
             }
 
             val body = response.body?.bytes()
-            if (body.isNullOrEmpty()) {
+            if (body == null || body.isEmpty()) {
                 emitLog("DoH relay got empty response body")
                 return null
             }
