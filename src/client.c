@@ -2545,7 +2545,7 @@ handshake_autoprobe_fragsize(int dns_fd)
 	return max_fragsize - 2;
 }
 
-static void
+static int
 handshake_set_fragsize(int dns_fd, int fragsize)
 {
 	char in[4096];
@@ -2563,23 +2563,24 @@ handshake_set_fragsize(int dns_fd, int fragsize)
 
 			if (strncmp("BADFRAG", in, 7) == 0) {
 				fprintf(stderr, "Server rejected fragsize. Keeping default.");
-				return;
+				return 0;
 			} else if (strncmp("BADIP", in, 5) == 0) {
 				fprintf(stderr, "Server rejected sender IP address.\n");
-				return;
+				return -1;
 			}
 
 			/* The server returns the accepted fragsize:
 			accepted_fragsize = ((in[0] & 0xff) << 8) | (in[1] & 0xff) */
-			return;
+			return 1;
 		}
 
 		fprintf(stderr, "Retrying set fragsize...\n");
 	}
 	if (!running)
-		return;
+		return 0;
 
 	fprintf(stderr, "No reply from server when setting fragsize. Keeping default.\n");
+	return 0;
 }
 
 int
@@ -2697,7 +2698,11 @@ client_handshake(int dns_fd, int raw_mode, int autodetect_frag_size, int fragsiz
 		}
 
 		client_debugf("Handshake stage: setting downstream fragment size to %d\n", fragsize);
-		handshake_set_fragsize(dns_fd, fragsize);
+		r = handshake_set_fragsize(dns_fd, fragsize);
+		if (r < 0) {
+			client_debugf("Handshake stage: downstream fragment size rejected with BADIP\n");
+			return 1;
+		}
 		if (!running)
 			return -1;
 
