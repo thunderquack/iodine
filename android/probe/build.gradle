@@ -7,6 +7,12 @@ android {
     namespace "se.kryo.iodine.probe"
     compileSdk 34
 
+    externalNativeBuild {
+        cmake {
+            path file("src/main/cpp/CMakeLists.txt")
+        }
+    }
+
     signingConfigs {
         debug {
             storeFile rootProject.file("debug.keystore")
@@ -22,6 +28,12 @@ android {
         targetSdk 34
         versionCode 1
         versionName "0.1.0"
+
+        externalNativeBuild {
+            cmake {
+                cppFlags ""
+            }
+        }
     }
 
     buildTypes {
