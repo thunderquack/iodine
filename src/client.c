@@ -331,6 +331,128 @@ debug_log_ip_packet(const char *stage, const char *buf, int len)
 	client_debugf("%s: unknown IP version=%u len=%d", stage, ipver, len);
 }
 
+static uint16_t
+checksum_fold(uint32_t sum)
+{
+	while (sum >> 16)
+		sum = (sum & 0xffffU) + (sum >> 16);
+	return (uint16_t) (~sum & 0xffffU);
+}
+
+static uint16_t
+checksum_bytes(const unsigned char *data, size_t len)
+{
+	uint32_t sum = 0;
+	size_t i;
+
+	for (i = 0; i + 1 < len; i += 2)
+		sum += ((uint32_t) data[i] << 8) | data[i + 1];
+	if (i < len)
+		sum += ((uint32_t) data[i] << 8);
+
+	return checksum_fold(sum);
+}
+
+static uint16_t
+checksum_ipv4_transport(const unsigned char *src, const unsigned char *dst,
+	unsigned char proto, const unsigned char *data, size_t len)
+{
+	uint32_t sum = 0;
+	size_t i;
+
+	for (i = 0; i < 4; i += 2) {
+		sum += ((uint32_t) src[i] << 8) | src[i + 1];
+		sum += ((uint32_t) dst[i] << 8) | dst[i + 1];
+	}
+	sum += proto;
+	sum += (uint32_t) len;
+
+	for (i = 0; i + 1 < len; i += 2)
+		sum += ((uint32_t) data[i] << 8) | data[i + 1];
+	if (i < len)
+		sum += ((uint32_t) data[i] << 8);
+
+	return checksum_fold(sum);
+}
+
+static void
+repair_ipv4_checksums(char *buf, int len)
+{
+	unsigned char *pkt = (unsigned char *) buf + 4;
+	int pktlen = len - 4;
+	unsigned int ihl;
+	unsigned int total_len;
+	unsigned int frag_field;
+	unsigned int l4_len;
+	unsigned char proto;
+	uint16_t old_ip_sum;
+
+	if (len < 24 || ((pkt[0] >> 4) != 4))
+		return;
+
+	ihl = (pkt[0] & 0x0f) * 4;
+	if (ihl < 20 || pktlen < (int) ihl)
+		return;
+
+	total_len = ((unsigned int) pkt[2] << 8) | pkt[3];
+	if (total_len < ihl)
+		return;
+	if (total_len > (unsigned int) pktlen)
+		total_len = pktlen;
+
+	old_ip_sum = ((uint16_t) pkt[10] << 8) | pkt[11];
+	pkt[10] = 0;
+	pkt[11] = 0;
+	{
+		uint16_t new_ip_sum = checksum_bytes(pkt, ihl);
+		pkt[10] = (unsigned char) (new_ip_sum >> 8);
+		pkt[11] = (unsigned char) (new_ip_sum & 0xff);
+		if (old_ip_sum != new_ip_sum) {
+			client_debugf("Checksum repair: IPv4 header %04x -> %04x",
+				old_ip_sum, new_ip_sum);
+		}
+	}
+
+	frag_field = (((unsigned int) pkt[6] << 8) | pkt[7]) & 0x3fffU;
+	if (frag_field != 0)
+		return;
+
+	proto = pkt[9];
+	if (proto != 1 && proto != 6 && proto != 17)
+		return;
+
+	l4_len = total_len - ihl;
+	if (l4_len < 4)
+		return;
+
+	if (proto == 1) {
+		uint16_t old_sum = ((uint16_t) pkt[ihl + 2] << 8) | pkt[ihl + 3];
+		uint16_t new_sum;
+		pkt[ihl + 2] = 0;
+		pkt[ihl + 3] = 0;
+		new_sum = checksum_bytes(pkt + ihl, l4_len);
+		pkt[ihl + 2] = (unsigned char) (new_sum >> 8);
+		pkt[ihl + 3] = (unsigned char) (new_sum & 0xff);
+		if (old_sum != new_sum) {
+			client_debugf("Checksum repair: ICMP %04x -> %04x", old_sum, new_sum);
+		}
+	} else if (proto == 6 || proto == 17) {
+		uint16_t old_sum = ((uint16_t) pkt[ihl + 16] << 8) | pkt[ihl + 17];
+		uint16_t new_sum;
+		pkt[ihl + 16] = 0;
+		pkt[ihl + 17] = 0;
+		new_sum = checksum_ipv4_transport(pkt + 12, pkt + 16, proto, pkt + ihl, l4_len);
+		if (proto == 17 && new_sum == 0)
+			new_sum = 0xffffU;
+		pkt[ihl + 16] = (unsigned char) (new_sum >> 8);
+		pkt[ihl + 17] = (unsigned char) (new_sum & 0xff);
+		if (old_sum != new_sum) {
+			client_debugf("Checksum repair: %s %04x -> %04x",
+				(proto == 6) ? "TCP" : "UDP", old_sum, new_sum);
+		}
+	}
+}
+
 static void
 handshake_reply_cache_clear(void)
 {
@@ -1082,6 +1204,9 @@ read_dns_withq(int dns_fd, int tun_fd, char *buf, int buflen, struct query *q)
 		r -= RAW_HDR_LEN;
 		datalen = sizeof(buf);
 		if (uncompress((uint8_t*)buf, &datalen, (uint8_t*) &data[RAW_HDR_LEN], r) == Z_OK) {
+#ifdef ANDROID
+			repair_ipv4_checksums(buf, (int) datalen);
+#endif
 			debug_log_ip_packet("Tunnel raw downstream write", buf, (int) datalen);
 			if (write_tun(tun_fd, buf, datalen) != 0)
 				client_debugf("Tunnel raw downstream write failed: len=%lu", datalen);
@@ -1454,6 +1579,9 @@ tunnel_dns(int tun_fd, int dns_fd)
 			/* RE-USES buf[] */
 			datalen = sizeof(buf);
 			if (uncompress((uint8_t*)buf, &datalen, (uint8_t*) inpkt.data, inpkt.len) == Z_OK) {
+#ifdef ANDROID
+				repair_ipv4_checksums(buf, (int) datalen);
+#endif
 				debug_log_ip_packet("Tunnel downstream write", buf, (int) datalen);
 				if (write_tun(tun_fd, buf, datalen) != 0)
 					client_debugf("Tunnel downstream write failed: seq=%d frag=%d len=%lu",
