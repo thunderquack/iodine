@@ -769,9 +769,16 @@ static int tunnel_tun(int tun_fd, struct dnsfd *dns_fds)
 
 	/* find target ip in packet, in is padded with 4 bytes TUN header */
 	header = (struct ip*) (in + 4);
+#if 1
+	if (debug >= 1)
+		debug_log_server_icmp_packet("SRV tun read raw", in + 4, read - 4, -1);
+#endif
 	userid = find_user_by_ip(header->ip_dst.s_addr);
-	if (userid < 0)
+	if (userid < 0) {
+		if (debug >= 1)
+			debug_log_server_icmp_packet("SRV tun read unmapped", in + 4, read - 4, -1);
 		return 0;
+	}
 
 	if (debug >= 1)
 		debug_log_server_icmp_packet("SRV tun read", in + 4, read - 4, userid);
