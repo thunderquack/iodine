@@ -371,6 +371,53 @@ debug_extract_ipv4_icmp_echo_reply(const char *buf, int len,
 	return 1;
 }
 
+static int
+debug_extract_ipv4_icmp_echo_request(const char *buf, int len,
+	unsigned int *src_a, unsigned int *src_b, unsigned int *src_c, unsigned int *src_d,
+	unsigned int *dst_a, unsigned int *dst_b, unsigned int *dst_c, unsigned int *dst_d,
+	unsigned int *icmp_id, unsigned int *icmp_seq)
+{
+	const unsigned char *pkt = (const unsigned char *) buf;
+	unsigned int ihl;
+
+	if (len < 20)
+		return 0;
+	if ((pkt[0] >> 4) != 4)
+		return 0;
+
+	ihl = (pkt[0] & 0x0f) * 4;
+	if (ihl < 20 || len < (int) (ihl + 8))
+		return 0;
+	if (pkt[9] != 1)
+		return 0;
+	if (pkt[ihl + 0] != 8 || pkt[ihl + 1] != 0)
+		return 0;
+
+	*src_a = pkt[12];
+	*src_b = pkt[13];
+	*src_c = pkt[14];
+	*src_d = pkt[15];
+	*dst_a = pkt[16];
+	*dst_b = pkt[17];
+	*dst_c = pkt[18];
+	*dst_d = pkt[19];
+	*icmp_id = ((unsigned int) pkt[ihl + 4] << 8) | pkt[ihl + 5];
+	*icmp_seq = ((unsigned int) pkt[ihl + 6] << 8) | pkt[ihl + 7];
+	return 1;
+}
+
+static int debug_upstream_icmp_request_valid = 0;
+static unsigned int debug_upstream_icmp_request_id = 0;
+static unsigned int debug_upstream_icmp_request_seq = 0;
+static unsigned int debug_upstream_icmp_request_src_a = 0;
+static unsigned int debug_upstream_icmp_request_src_b = 0;
+static unsigned int debug_upstream_icmp_request_src_c = 0;
+static unsigned int debug_upstream_icmp_request_src_d = 0;
+static unsigned int debug_upstream_icmp_request_dst_a = 0;
+static unsigned int debug_upstream_icmp_request_dst_b = 0;
+static unsigned int debug_upstream_icmp_request_dst_c = 0;
+static unsigned int debug_upstream_icmp_request_dst_d = 0;
+
 static uint16_t
 checksum_fold(uint32_t sum)
 {
@@ -509,6 +556,7 @@ reset_upstream_packet_state(void)
 	outpkt.seqno = 0;
 	outpkt.fragment = 0;
 	outchunkresent = 0;
+	debug_upstream_icmp_request_valid = 0;
 }
 
 static void
@@ -577,6 +625,20 @@ start_upstream_packet(int dns_fd, const char *data, unsigned long outlen)
 	outpkt.len = outlen;
 	outpkt.fragment = 0;
 	outchunkresent = 0;
+
+#ifdef ANDROID
+	if (debug_upstream_icmp_request_valid) {
+		client_debugf("ICMP probe upstream start: dns_seq=%d id=%u icmp_seq=%u %u.%u.%u.%u -> %u.%u.%u.%u compressed=%lu",
+			      outpkt.seqno,
+			      debug_upstream_icmp_request_id,
+			      debug_upstream_icmp_request_seq,
+			      debug_upstream_icmp_request_src_a, debug_upstream_icmp_request_src_b,
+			      debug_upstream_icmp_request_src_c, debug_upstream_icmp_request_src_d,
+			      debug_upstream_icmp_request_dst_a, debug_upstream_icmp_request_dst_b,
+			      debug_upstream_icmp_request_dst_c, debug_upstream_icmp_request_dst_d,
+			      outlen);
+	}
+#endif
 
 	if (conn == CONN_DNS_NULL) {
 		client_debugf("Tunnel tun send: seq=%d fragment=%d compressed=%lu via chunked DNS",
@@ -1381,6 +1443,26 @@ tunnel_tun(int tun_fd, int dns_fd)
 		      (int) read, conn, is_sending());
 	debug_log_ip_packet("Tunnel tun read packet", in, (int) read);
 
+#ifdef ANDROID
+	if (debug_extract_ipv4_icmp_echo_request(in, (int) read,
+			&debug_upstream_icmp_request_src_a, &debug_upstream_icmp_request_src_b,
+			&debug_upstream_icmp_request_src_c, &debug_upstream_icmp_request_src_d,
+			&debug_upstream_icmp_request_dst_a, &debug_upstream_icmp_request_dst_b,
+			&debug_upstream_icmp_request_dst_c, &debug_upstream_icmp_request_dst_d,
+			&debug_upstream_icmp_request_id, &debug_upstream_icmp_request_seq)) {
+		debug_upstream_icmp_request_valid = 1;
+		client_debugf("ICMP probe upstream captured: id=%u seq=%u %u.%u.%u.%u -> %u.%u.%u.%u len=%d",
+			      debug_upstream_icmp_request_id, debug_upstream_icmp_request_seq,
+			      debug_upstream_icmp_request_src_a, debug_upstream_icmp_request_src_b,
+			      debug_upstream_icmp_request_src_c, debug_upstream_icmp_request_src_d,
+			      debug_upstream_icmp_request_dst_a, debug_upstream_icmp_request_dst_b,
+			      debug_upstream_icmp_request_dst_c, debug_upstream_icmp_request_dst_d,
+			      (int) read);
+	} else {
+		debug_upstream_icmp_request_valid = 0;
+	}
+#endif
+
 	outlen = sizeof(out);
 	inlen = read;
 	compress2((uint8_t*)out, &outlen, (uint8_t*)in, inlen, 9);
@@ -1704,16 +1786,33 @@ tunnel_dns(int tun_fd, int dns_fd)
 			client_debugf("Tunnel chunk ack: chunkid=%u seq=%d frag=%d sentlen=%d offset=%d len=%d",
 				      q.id, up_ack_seqno, up_ack_fragment, outpkt.sentlen,
 				      outpkt.offset, outpkt.len);
+#ifdef ANDROID
+			if (debug_upstream_icmp_request_valid) {
+				client_debugf("ICMP probe upstream ack: dns_seq=%d frag=%d id=%u icmp_seq=%u",
+					      up_ack_seqno, up_ack_fragment,
+					      debug_upstream_icmp_request_id,
+					      debug_upstream_icmp_request_seq);
+			}
+#endif
 
 			outpkt.offset += outpkt.sentlen;
 			if (outpkt.offset >= outpkt.len) {
 				/* Packet completed */
 				client_debugf("Tunnel chunk complete: seq=%d total_len=%d",
 					      outpkt.seqno, outpkt.len);
+#ifdef ANDROID
+				if (debug_upstream_icmp_request_valid) {
+					client_debugf("ICMP probe upstream complete: dns_seq=%d id=%u icmp_seq=%u",
+						      outpkt.seqno,
+						      debug_upstream_icmp_request_id,
+						      debug_upstream_icmp_request_seq);
+				}
+#endif
 				outpkt.offset = 0;
 				outpkt.len = 0;
 				outpkt.sentlen = 0;
 				outchunkresent = 0;
+				debug_upstream_icmp_request_valid = 0;
 				maybe_send_queued_upstream(dns_fd);
 				if (is_sending()) {
 					send_ping_soon = 0;
