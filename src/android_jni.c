@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -23,6 +24,58 @@ static int raw_mode = 1;
 static int autodetect_frag_size = 1;
 static int max_downstream_frag_size = 3072;
 static char password_buf[33];
+
+static int
+parse_resolver_endpoint(const char *resolver, char **host_out, int *port_out)
+{
+	const char *host_start;
+	const char *port_start = NULL;
+	const char *closing_bracket;
+	char *host_copy;
+	size_t host_len;
+	long parsed_port = DNS_PORT;
+
+	if (resolver == NULL || resolver[0] == '\0')
+		return -1;
+
+	host_start = resolver;
+	if (resolver[0] == '[') {
+		closing_bracket = strchr(resolver, ']');
+		if (closing_bracket == NULL)
+			return -1;
+		host_start = resolver + 1;
+		host_len = (size_t) (closing_bracket - host_start);
+		if (closing_bracket[1] == ':')
+			port_start = closing_bracket + 2;
+	} else {
+		const char *last_colon = strrchr(resolver, ':');
+		const char *first_colon = strchr(resolver, ':');
+		if (last_colon != NULL && first_colon == last_colon) {
+			host_len = (size_t) (last_colon - resolver);
+			port_start = last_colon + 1;
+		} else {
+			host_len = strlen(resolver);
+		}
+	}
+
+	if (port_start != NULL && port_start[0] != '\0') {
+		char *endptr = NULL;
+		parsed_port = strtol(port_start, &endptr, 10);
+		if (endptr == NULL || *endptr != '\0' || parsed_port < 1 || parsed_port > 65535)
+			return -1;
+	}
+
+	host_copy = malloc(host_len + 1);
+	if (host_copy == NULL)
+		return -1;
+
+	memcpy(host_copy, host_start, host_len);
+	host_copy[host_len] = '\0';
+
+	*host_out = host_copy;
+	*port_out = (int) parsed_port;
+	return 0;
+}
 
 static char *
 copy_jstring(JNIEnv *env, jstring value)
@@ -101,6 +154,14 @@ emit_log(const char *line)
 	(*env)->DeleteLocalRef(env, message);
 }
 
+void
+android_jni_emit_log(const char *line)
+{
+	if (line == NULL || line[0] == '\0')
+		return;
+	emit_log(line);
+}
+
 static void
 parse_options(char *options)
 {
@@ -113,6 +174,9 @@ parse_options(char *options)
 	client_set_lazymode(1);
 	client_set_selecttimeout(4);
 	client_set_hostname_maxlen(0xFF);
+	client_set_handshake_timeout_multiplier(1);
+	client_set_force_base32_upstream(0);
+	client_set_doh_url(NULL);
 
 	if (options == NULL)
 		return;
@@ -125,6 +189,10 @@ parse_options(char *options)
 			nameserv_family = AF_INET6;
 		} else if (!strcmp(token, "-r")) {
 			raw_mode = 0;
+		} else if (!strcmp(token, "-U")) {
+			token = strtok(NULL, " \t\r\n");
+			if (token != NULL)
+				client_set_doh_url(token);
 		} else if (!strcmp(token, "-m")) {
 			token = strtok(NULL, " \t\r\n");
 			if (token != NULL) {
@@ -191,8 +259,11 @@ Java_se_kryo_iodine_IodineVpnService_nativeHandshake(JNIEnv *env, jobject thiz,
 	char *domain_copy = NULL;
 	char *password_copy = NULL;
 	char *options_copy = NULL;
+	char *resolver_host = NULL;
 	struct sockaddr_storage nameservaddr;
 	int nameservaddr_len;
+	int dns_family;
+	int resolver_port = DNS_PORT;
 	char *errormsg = NULL;
 
 	(void) thiz;
@@ -202,8 +273,8 @@ Java_se_kryo_iodine_IodineVpnService_nativeHandshake(JNIEnv *env, jobject thiz,
 	password_copy = copy_jstring(env, password);
 	options_copy = copy_jstring(env, options);
 
-	if (resolver_copy == NULL || domain_copy == NULL || password_copy == NULL) {
-		emit_log("Missing resolver, domain, or password.");
+	if (domain_copy == NULL || password_copy == NULL) {
+		emit_log("Missing domain or password.");
 		goto fail;
 	}
 
@@ -211,10 +282,29 @@ Java_se_kryo_iodine_IodineVpnService_nativeHandshake(JNIEnv *env, jobject thiz,
 	android_vpn_set_enabled(1);
 	parse_options(options_copy);
 
-	nameservaddr_len = get_addr(resolver_copy, DNS_PORT, nameserv_family, 0, &nameservaddr);
-	if (nameservaddr_len < 0) {
-		emit_log("Failed to resolve nameserver.");
-		goto fail;
+	if (client_get_doh_url() == NULL) {
+		if (resolver_copy == NULL || resolver_copy[0] == '\0') {
+			emit_log("Missing resolver.");
+			goto fail;
+		}
+
+		if (parse_resolver_endpoint(resolver_copy, &resolver_host, &resolver_port) != 0) {
+			emit_log("Failed to parse resolver address.");
+			goto fail;
+		}
+
+		nameservaddr_len = get_addr(resolver_host, resolver_port, nameserv_family, 0, &nameservaddr);
+		if (nameservaddr_len < 0) {
+			emit_log("Failed to resolve nameserver.");
+			goto fail;
+		}
+	}
+
+	if (resolver_copy != NULL && strncmp(resolver_copy, "127.0.0.1:", 10) == 0) {
+		client_set_handshake_timeout_multiplier(5);
+		client_set_force_base32_upstream(1);
+		emit_log("Using extended handshake timeouts for local DoH relay.");
+		emit_log("Using conservative upstream Base32 profile for local DoH relay.");
 	}
 
 	if (check_topdomain(domain_copy, 0, &errormsg)) {
@@ -222,13 +312,16 @@ Java_se_kryo_iodine_IodineVpnService_nativeHandshake(JNIEnv *env, jobject thiz,
 		goto fail;
 	}
 
-	client_set_nameserver(&nameservaddr, nameservaddr_len);
+	if (client_get_doh_url() == NULL)
+		client_set_nameserver(&nameservaddr, nameservaddr_len);
 	client_set_topdomain(domain_copy);
 	memset(password_buf, 0, sizeof(password_buf));
 	strncpy(password_buf, password_copy, sizeof(password_buf) - 1);
 	client_set_password(password_buf);
 
-	dns_fd = open_dns_from_host(NULL, 0, nameservaddr.ss_family, AI_PASSIVE);
+	dns_family = (client_get_doh_url() == NULL) ? nameservaddr.ss_family :
+		((nameserv_family == AF_UNSPEC) ? AF_INET : nameserv_family);
+	dns_fd = open_dns_from_host(NULL, 0, dns_family, AI_PASSIVE);
 	if (dns_fd < 0) {
 		emit_log("Failed to open client UDP socket.");
 		goto fail;
@@ -240,12 +333,23 @@ Java_se_kryo_iodine_IodineVpnService_nativeHandshake(JNIEnv *env, jobject thiz,
 
 	emit_log("Running iodine handshake.");
 	if (client_handshake(dns_fd, raw_mode, autodetect_frag_size, max_downstream_frag_size)) {
+		if (client_get_doh_url() != NULL) {
+			if (errno == ENOSYS) {
+				emit_log("DoH is not compiled into this Android build yet.");
+			} else if (errno != 0) {
+				char errmsg[256];
+				snprintf(errmsg, sizeof(errmsg),
+					 "DoH handshake failed: %s", strerror(errno));
+				emit_log(errmsg);
+			}
+		}
 		emit_log("Handshake failed.");
 		goto fail;
 	}
 
 	emit_log("Handshake complete.");
 	free(resolver_copy);
+	free(resolver_host);
 	free(domain_copy);
 	free(password_copy);
 	free(options_copy);
@@ -258,6 +362,7 @@ fail:
 	}
 	android_vpn_set_enabled(0);
 	free(resolver_copy);
+	free(resolver_host);
 	free(domain_copy);
 	free(password_copy);
 	free(options_copy);
@@ -312,6 +417,7 @@ Java_se_kryo_iodine_IodineVpnService_nativeStop(JNIEnv *env, jobject thiz)
 	(void) env;
 	(void) thiz;
 
+	emit_log("nativeStop called.");
 	client_stop();
 
 	if (dns_fd >= 0) {

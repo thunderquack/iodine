@@ -16,6 +16,8 @@
  */
 
 #include <ctype.h>
+#include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -52,11 +54,22 @@
 #include "tun.h"
 #include "version.h"
 #include "client.h"
+#include "resolver.h"
 #ifdef ANDROID
 #include "android_vpn.h"
+void android_jni_emit_log(const char *line);
 #endif
 
 static void handshake_lazyoff(int dns_fd);
+static void reset_upstream_packet_state(void);
+static void send_raw_data(int dns_fd);
+static void send_chunk(int fd);
+static inline int is_sending(void);
+static void upstream_queue_clear(void);
+static int upstream_queue_push(const char *data, int len);
+static int upstream_queue_pop(char *data, int maxlen);
+static void start_upstream_packet(int dns_fd, const char *data, unsigned long outlen);
+static void maybe_send_queued_upstream(int dns_fd);
 
 static int running;
 static const char *password;
@@ -65,7 +78,8 @@ static struct sockaddr_storage nameserv;
 static int nameserv_len;
 static struct sockaddr_storage raw_serv;
 static int raw_serv_len;
-static const char *topdomain;
+static char *topdomain;
+static char *doh_url;
 
 static uint16_t rand_seed;
 
@@ -73,6 +87,17 @@ static uint16_t rand_seed;
 static struct packet outpkt;
 static struct packet inpkt;
 int outchunkresent = 0;
+
+#define UPSTREAM_QUEUE_SIZE 8
+struct upstream_queue_entry {
+	int valid;
+	int len;
+	char data[64 * 1024];
+};
+static struct upstream_queue_entry upstream_queue[UPSTREAM_QUEUE_SIZE];
+static int upstream_queue_head = 0;
+static int upstream_queue_tail = 0;
+static int upstream_queue_len = 0;
 
 /* My userid at the server */
 static char userid;
@@ -104,6 +129,590 @@ static time_t lastdownstreamtime;
 static long send_query_sendcnt = -1;
 static long send_query_recvcnt = 0;
 static int hostname_maxlen = 0xFF;
+static int handshake_timeout_multiplier = 1;
+static int force_base32_upstream = 0;
+
+#define HANDSHAKE_REPLY_CACHE_SIZE 16
+struct handshake_reply_cache_entry {
+	int valid;
+	int rv;
+	int datalen;
+	struct query q;
+	char data[4096];
+};
+static struct handshake_reply_cache_entry handshake_reply_cache[HANDSHAKE_REPLY_CACHE_SIZE];
+static int handshake_reply_cache_next = 0;
+
+static void
+client_debugf(const char *fmt, ...)
+{
+	char line[512];
+	va_list ap;
+
+	va_start(ap, fmt);
+	vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+
+	fprintf(stderr, "%s\n", line);
+#ifdef ANDROID
+	android_jni_emit_log(line);
+#endif
+}
+
+static const char *
+debug_qtype_name(unsigned short qtype)
+{
+	switch (qtype) {
+	case T_A:
+		return "A";
+	case T_NS:
+		return "NS";
+	case T_CNAME:
+		return "CNAME";
+	case T_SOA:
+		return "SOA";
+	case T_NULL:
+		return "NULL";
+	case T_MX:
+		return "MX";
+	case T_TXT:
+		return "TXT";
+	case T_AAAA:
+		return "AAAA";
+	case T_SRV:
+		return "SRV";
+	case T_PRIVATE:
+		return "PRIVATE";
+	default:
+		return "TYPE?";
+	}
+}
+
+static void
+debug_print_reply_prefix(const char *stage, const char *buf, int len)
+{
+	char hexbuf[33];
+	char asciibuf[17];
+	int i;
+	int shown;
+
+	if (len <= 0) {
+		client_debugf("%s: no payload bytes", stage);
+		return;
+	}
+
+	shown = MIN(len, 16);
+	memset(hexbuf, 0, sizeof(hexbuf));
+	memset(asciibuf, 0, sizeof(asciibuf));
+	for (i = 0; i < shown; i++) {
+		unsigned char ch = ((const unsigned char *) buf)[i];
+		snprintf(&hexbuf[i * 2], sizeof(hexbuf) - (i * 2), "%02x", ch);
+		asciibuf[i] = isprint(ch) ? ch : '.';
+	}
+
+	client_debugf("%s: payload len=%d prefix_hex=%s prefix_ascii=\"%s\"",
+		stage, len, hexbuf, asciibuf);
+}
+
+static void
+debug_log_ip_packet(const char *stage, const char *buf, int len)
+{
+	const unsigned char *pkt = (const unsigned char *) buf;
+	unsigned int ipver;
+	unsigned int ihl;
+	char summary[256];
+
+	if (len < 5) {
+		client_debugf("%s: short packet len=%d", stage, len);
+		return;
+	}
+
+	/* Most client paths carry a 4-byte pseudo header before the IP packet. */
+	pkt += 4;
+	len -= 4;
+	if (len <= 0) {
+		client_debugf("%s: no IP payload after pseudo header", stage);
+		return;
+	}
+
+	ipver = pkt[0] >> 4;
+	if (ipver == 4) {
+		unsigned int proto;
+		unsigned int src_port = 0;
+		unsigned int dst_port = 0;
+		unsigned int icmp_type = 0;
+		unsigned int icmp_code = 0;
+		unsigned int icmp_id = 0;
+		unsigned int icmp_seq = 0;
+
+		if (len < 20) {
+			client_debugf("%s: short IPv4 packet len=%d", stage, len);
+			return;
+		}
+
+		ihl = (pkt[0] & 0x0f) * 4;
+		if (ihl < 20 || len < (int) ihl) {
+			client_debugf("%s: invalid IPv4 IHL=%u len=%d", stage, ihl, len);
+			return;
+		}
+
+		proto = pkt[9];
+		if ((proto == 6 || proto == 17) && len >= (int) (ihl + 4)) {
+			src_port = ((unsigned int) pkt[ihl] << 8) | pkt[ihl + 1];
+			dst_port = ((unsigned int) pkt[ihl + 2] << 8) | pkt[ihl + 3];
+		} else if (proto == 1 && len >= (int) (ihl + 8)) {
+			icmp_type = pkt[ihl];
+			icmp_code = pkt[ihl + 1];
+			icmp_id = ((unsigned int) pkt[ihl + 4] << 8) | pkt[ihl + 5];
+			icmp_seq = ((unsigned int) pkt[ihl + 6] << 8) | pkt[ihl + 7];
+		}
+
+		if (proto == 1) {
+			snprintf(summary, sizeof(summary),
+				"%s: IPv4 ICMP type=%u code=%u id=%u seq=%u %u.%u.%u.%u -> %u.%u.%u.%u ip_len=%d",
+				stage,
+				icmp_type, icmp_code, icmp_id, icmp_seq,
+				pkt[12], pkt[13], pkt[14], pkt[15],
+				pkt[16], pkt[17], pkt[18], pkt[19],
+				len);
+		} else {
+			snprintf(summary, sizeof(summary),
+				"%s: IPv4 proto=%u %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u ip_len=%d",
+				stage,
+				proto,
+				pkt[12], pkt[13], pkt[14], pkt[15], src_port,
+				pkt[16], pkt[17], pkt[18], pkt[19], dst_port,
+				len);
+		}
+		client_debugf("%s", summary);
+		return;
+	}
+
+	if (ipver == 6) {
+		unsigned int next_header;
+		unsigned int payload_len;
+		unsigned int src_port = 0;
+		unsigned int dst_port = 0;
+		unsigned int icmp_type = 0;
+		unsigned int icmp_code = 0;
+		unsigned int icmp_id = 0;
+		unsigned int icmp_seq = 0;
+
+		if (len < 40) {
+			client_debugf("%s: short IPv6 packet len=%d", stage, len);
+			return;
+		}
+
+		next_header = pkt[6];
+		payload_len = ((unsigned int) pkt[4] << 8) | pkt[5];
+		if ((next_header == 6 || next_header == 17) && len >= 44) {
+			src_port = ((unsigned int) pkt[40] << 8) | pkt[41];
+			dst_port = ((unsigned int) pkt[42] << 8) | pkt[43];
+		} else if (next_header == 58 && len >= 48) {
+			icmp_type = pkt[40];
+			icmp_code = pkt[41];
+			icmp_id = ((unsigned int) pkt[44] << 8) | pkt[45];
+			icmp_seq = ((unsigned int) pkt[46] << 8) | pkt[47];
+		}
+
+		if (next_header == 58) {
+			snprintf(summary, sizeof(summary),
+				"%s: IPv6 ICMP type=%u code=%u id=%u seq=%u payload_len=%u",
+				stage, icmp_type, icmp_code, icmp_id, icmp_seq, payload_len);
+		} else {
+			snprintf(summary, sizeof(summary),
+				"%s: IPv6 next=%u payload_len=%u src_port=%u dst_port=%u",
+				stage, next_header, payload_len, src_port, dst_port);
+		}
+		client_debugf("%s", summary);
+		return;
+	}
+
+	client_debugf("%s: unknown IP version=%u len=%d", stage, ipver, len);
+}
+
+static int
+debug_extract_ipv4_icmp_echo_reply(const char *buf, int len,
+	unsigned int *src_a, unsigned int *src_b, unsigned int *src_c, unsigned int *src_d,
+	unsigned int *dst_a, unsigned int *dst_b, unsigned int *dst_c, unsigned int *dst_d,
+	unsigned int *icmp_id, unsigned int *icmp_seq)
+{
+	const unsigned char *pkt = (const unsigned char *) buf;
+	unsigned int ihl;
+
+	if (len < 5)
+		return 0;
+
+	pkt += 4;
+	len -= 4;
+	if (len < 28)
+		return 0;
+	if ((pkt[0] >> 4) != 4)
+		return 0;
+
+	ihl = (pkt[0] & 0x0f) * 4;
+	if (ihl < 20 || len < (int) (ihl + 8))
+		return 0;
+	if (pkt[9] != 1)
+		return 0;
+	if (pkt[ihl] != 0 || pkt[ihl + 1] != 0)
+		return 0;
+
+	*src_a = pkt[12];
+	*src_b = pkt[13];
+	*src_c = pkt[14];
+	*src_d = pkt[15];
+	*dst_a = pkt[16];
+	*dst_b = pkt[17];
+	*dst_c = pkt[18];
+	*dst_d = pkt[19];
+	*icmp_id = ((unsigned int) pkt[ihl + 4] << 8) | pkt[ihl + 5];
+	*icmp_seq = ((unsigned int) pkt[ihl + 6] << 8) | pkt[ihl + 7];
+	return 1;
+}
+
+static int
+debug_extract_ipv4_icmp_echo_request(const char *buf, int len,
+	unsigned int *src_a, unsigned int *src_b, unsigned int *src_c, unsigned int *src_d,
+	unsigned int *dst_a, unsigned int *dst_b, unsigned int *dst_c, unsigned int *dst_d,
+	unsigned int *icmp_id, unsigned int *icmp_seq)
+{
+	const unsigned char *pkt = (const unsigned char *) buf;
+	unsigned int ihl;
+
+	if (len < 20)
+		return 0;
+	if ((pkt[0] >> 4) != 4)
+		return 0;
+
+	ihl = (pkt[0] & 0x0f) * 4;
+	if (ihl < 20 || len < (int) (ihl + 8))
+		return 0;
+	if (pkt[9] != 1)
+		return 0;
+	if (pkt[ihl + 0] != 8 || pkt[ihl + 1] != 0)
+		return 0;
+
+	*src_a = pkt[12];
+	*src_b = pkt[13];
+	*src_c = pkt[14];
+	*src_d = pkt[15];
+	*dst_a = pkt[16];
+	*dst_b = pkt[17];
+	*dst_c = pkt[18];
+	*dst_d = pkt[19];
+	*icmp_id = ((unsigned int) pkt[ihl + 4] << 8) | pkt[ihl + 5];
+	*icmp_seq = ((unsigned int) pkt[ihl + 6] << 8) | pkt[ihl + 7];
+	return 1;
+}
+
+static int debug_upstream_icmp_request_valid = 0;
+static unsigned int debug_upstream_icmp_request_id = 0;
+static unsigned int debug_upstream_icmp_request_seq = 0;
+static unsigned int debug_upstream_icmp_request_src_a = 0;
+static unsigned int debug_upstream_icmp_request_src_b = 0;
+static unsigned int debug_upstream_icmp_request_src_c = 0;
+static unsigned int debug_upstream_icmp_request_src_d = 0;
+static unsigned int debug_upstream_icmp_request_dst_a = 0;
+static unsigned int debug_upstream_icmp_request_dst_b = 0;
+static unsigned int debug_upstream_icmp_request_dst_c = 0;
+static unsigned int debug_upstream_icmp_request_dst_d = 0;
+
+static uint16_t
+checksum_fold(uint32_t sum)
+{
+	while (sum >> 16)
+		sum = (sum & 0xffffU) + (sum >> 16);
+	return (uint16_t) (~sum & 0xffffU);
+}
+
+static uint16_t
+checksum_bytes(const unsigned char *data, size_t len)
+{
+	uint32_t sum = 0;
+	size_t i;
+
+	for (i = 0; i + 1 < len; i += 2)
+		sum += ((uint32_t) data[i] << 8) | data[i + 1];
+	if (i < len)
+		sum += ((uint32_t) data[i] << 8);
+
+	return checksum_fold(sum);
+}
+
+static uint16_t
+checksum_ipv4_transport(const unsigned char *src, const unsigned char *dst,
+	unsigned char proto, const unsigned char *data, size_t len)
+{
+	uint32_t sum = 0;
+	size_t i;
+
+	for (i = 0; i < 4; i += 2) {
+		sum += ((uint32_t) src[i] << 8) | src[i + 1];
+		sum += ((uint32_t) dst[i] << 8) | dst[i + 1];
+	}
+	sum += proto;
+	sum += (uint32_t) len;
+
+	for (i = 0; i + 1 < len; i += 2)
+		sum += ((uint32_t) data[i] << 8) | data[i + 1];
+	if (i < len)
+		sum += ((uint32_t) data[i] << 8);
+
+	return checksum_fold(sum);
+}
+
+static void
+repair_ipv4_checksums(char *buf, int len)
+{
+	unsigned char *pkt = (unsigned char *) buf + 4;
+	int pktlen = len - 4;
+	unsigned int ihl;
+	unsigned int total_len;
+	unsigned int frag_field;
+	unsigned int l4_len;
+	unsigned char proto;
+	uint16_t old_ip_sum;
+
+	if (len < 24 || ((pkt[0] >> 4) != 4))
+		return;
+
+	ihl = (pkt[0] & 0x0f) * 4;
+	if (ihl < 20 || pktlen < (int) ihl)
+		return;
+
+	total_len = ((unsigned int) pkt[2] << 8) | pkt[3];
+	if (total_len < ihl)
+		return;
+	if (total_len > (unsigned int) pktlen)
+		total_len = pktlen;
+
+	old_ip_sum = ((uint16_t) pkt[10] << 8) | pkt[11];
+	pkt[10] = 0;
+	pkt[11] = 0;
+	{
+		uint16_t new_ip_sum = checksum_bytes(pkt, ihl);
+		pkt[10] = (unsigned char) (new_ip_sum >> 8);
+		pkt[11] = (unsigned char) (new_ip_sum & 0xff);
+		if (old_ip_sum != new_ip_sum) {
+			client_debugf("Checksum repair: IPv4 header %04x -> %04x",
+				old_ip_sum, new_ip_sum);
+		}
+	}
+
+	frag_field = (((unsigned int) pkt[6] << 8) | pkt[7]) & 0x3fffU;
+	if (frag_field != 0)
+		return;
+
+	proto = pkt[9];
+	if (proto != 1 && proto != 6 && proto != 17)
+		return;
+
+	l4_len = total_len - ihl;
+	if (l4_len < 4)
+		return;
+
+	if (proto == 1) {
+		uint16_t old_sum = ((uint16_t) pkt[ihl + 2] << 8) | pkt[ihl + 3];
+		uint16_t new_sum;
+		pkt[ihl + 2] = 0;
+		pkt[ihl + 3] = 0;
+		new_sum = checksum_bytes(pkt + ihl, l4_len);
+		pkt[ihl + 2] = (unsigned char) (new_sum >> 8);
+		pkt[ihl + 3] = (unsigned char) (new_sum & 0xff);
+		if (old_sum != new_sum) {
+			client_debugf("Checksum repair: ICMP %04x -> %04x", old_sum, new_sum);
+		}
+	} else if (proto == 6 || proto == 17) {
+		uint16_t old_sum = ((uint16_t) pkt[ihl + 16] << 8) | pkt[ihl + 17];
+		uint16_t new_sum;
+		pkt[ihl + 16] = 0;
+		pkt[ihl + 17] = 0;
+		new_sum = checksum_ipv4_transport(pkt + 12, pkt + 16, proto, pkt + ihl, l4_len);
+		if (proto == 17 && new_sum == 0)
+			new_sum = 0xffffU;
+		pkt[ihl + 16] = (unsigned char) (new_sum >> 8);
+		pkt[ihl + 17] = (unsigned char) (new_sum & 0xff);
+		if (old_sum != new_sum) {
+			client_debugf("Checksum repair: %s %04x -> %04x",
+				(proto == 6) ? "TCP" : "UDP", old_sum, new_sum);
+		}
+	}
+}
+
+static void
+handshake_reply_cache_clear(void)
+{
+	memset(handshake_reply_cache, 0, sizeof(handshake_reply_cache));
+	handshake_reply_cache_next = 0;
+}
+
+static void
+reset_upstream_packet_state(void)
+{
+	outpkt.len = 0;
+	outpkt.sentlen = 0;
+	outpkt.offset = 0;
+	outpkt.seqno = 0;
+	outpkt.fragment = 0;
+	outchunkresent = 0;
+	debug_upstream_icmp_request_valid = 0;
+}
+
+static void
+upstream_queue_clear(void)
+{
+	memset(upstream_queue, 0, sizeof(upstream_queue));
+	upstream_queue_head = 0;
+	upstream_queue_tail = 0;
+	upstream_queue_len = 0;
+}
+
+static int
+upstream_queue_push(const char *data, int len)
+{
+	struct upstream_queue_entry *entry;
+
+	if (len <= 0)
+		return 0;
+
+	if (upstream_queue_len >= UPSTREAM_QUEUE_SIZE) {
+		client_debugf("Tunnel tun queue full: dropping compressed=%d", len);
+		return -1;
+	}
+
+	entry = &upstream_queue[upstream_queue_tail];
+	memset(entry, 0, sizeof(*entry));
+	entry->valid = 1;
+	entry->len = MIN(len, (int) sizeof(entry->data));
+	memcpy(entry->data, data, entry->len);
+
+	upstream_queue_tail = (upstream_queue_tail + 1) % UPSTREAM_QUEUE_SIZE;
+	upstream_queue_len++;
+	client_debugf("Tunnel tun queued: compressed=%d queue_len=%d",
+		      entry->len, upstream_queue_len);
+	return 0;
+}
+
+static int
+upstream_queue_pop(char *data, int maxlen)
+{
+	struct upstream_queue_entry *entry;
+	int len;
+
+	if (upstream_queue_len <= 0)
+		return 0;
+
+	entry = &upstream_queue[upstream_queue_head];
+	if (!entry->valid)
+		return 0;
+
+	len = MIN(entry->len, maxlen);
+	memcpy(data, entry->data, len);
+	memset(entry, 0, sizeof(*entry));
+	upstream_queue_head = (upstream_queue_head + 1) % UPSTREAM_QUEUE_SIZE;
+	upstream_queue_len--;
+	return len;
+}
+
+static void
+start_upstream_packet(int dns_fd, const char *data, unsigned long outlen)
+{
+	memcpy(outpkt.data, data, MIN(outlen, sizeof(outpkt.data)));
+	outpkt.sentlen = 0;
+	outpkt.offset = 0;
+	outpkt.seqno = (outpkt.seqno + 1) & 7;
+	outpkt.len = outlen;
+	outpkt.fragment = 0;
+	outchunkresent = 0;
+
+#ifdef ANDROID
+	if (debug_upstream_icmp_request_valid) {
+		client_debugf("ICMP probe upstream start: dns_seq=%d id=%u icmp_seq=%u %u.%u.%u.%u -> %u.%u.%u.%u compressed=%lu",
+			      outpkt.seqno,
+			      debug_upstream_icmp_request_id,
+			      debug_upstream_icmp_request_seq,
+			      debug_upstream_icmp_request_src_a, debug_upstream_icmp_request_src_b,
+			      debug_upstream_icmp_request_src_c, debug_upstream_icmp_request_src_d,
+			      debug_upstream_icmp_request_dst_a, debug_upstream_icmp_request_dst_b,
+			      debug_upstream_icmp_request_dst_c, debug_upstream_icmp_request_dst_d,
+			      outlen);
+	}
+#endif
+
+	if (conn == CONN_DNS_NULL) {
+		client_debugf("Tunnel tun send: seq=%d fragment=%d compressed=%lu via chunked DNS",
+			      outpkt.seqno, outpkt.fragment, outlen);
+		send_chunk(dns_fd);
+		send_ping_soon = 0;
+	} else {
+		client_debugf("Tunnel tun send: seq=%d compressed=%lu via raw/label DNS",
+			      outpkt.seqno, outlen);
+		send_raw_data(dns_fd);
+	}
+}
+
+static void
+maybe_send_queued_upstream(int dns_fd)
+{
+	char buf[64 * 1024];
+	int len;
+
+	if (is_sending())
+		return;
+
+	len = upstream_queue_pop(buf, sizeof(buf));
+	if (len <= 0)
+		return;
+
+	client_debugf("Tunnel tun dequeue: compressed=%d queue_len=%d",
+		      len, upstream_queue_len);
+	start_upstream_packet(dns_fd, buf, len);
+}
+
+static void
+handshake_reply_cache_store(struct query *q, int rv, const char *buf)
+{
+	struct handshake_reply_cache_entry *entry;
+
+	entry = &handshake_reply_cache[handshake_reply_cache_next];
+	handshake_reply_cache_next =
+		(handshake_reply_cache_next + 1) % HANDSHAKE_REPLY_CACHE_SIZE;
+
+	memset(entry, 0, sizeof(*entry));
+	entry->valid = 1;
+	entry->rv = rv;
+	entry->q = *q;
+	if (rv > 0 && buf != NULL) {
+		entry->datalen = MIN(rv, (int) sizeof(entry->data));
+		memcpy(entry->data, buf, entry->datalen);
+	}
+}
+
+static int
+handshake_reply_cache_take(uint16_t wanted_id, char c1, char c2,
+			   struct query *q_out, char *buf, int buflen)
+{
+	int i;
+
+	for (i = 0; i < HANDSHAKE_REPLY_CACHE_SIZE; i++) {
+		struct handshake_reply_cache_entry *entry = &handshake_reply_cache[i];
+		if (!entry->valid)
+			continue;
+		if (entry->q.id != wanted_id)
+			continue;
+		if (entry->q.name[0] != c1 && entry->q.name[0] != c2)
+			continue;
+
+		*q_out = entry->q;
+		if (entry->rv > 0 && buf != NULL && buflen > 0)
+			memcpy(buf, entry->data, MIN(entry->datalen, buflen));
+		entry->valid = 0;
+		return entry->rv;
+	}
+
+	return -9999;
+}
 
 void
 client_init(void)
@@ -117,13 +726,14 @@ client_init(void)
 	chunkid_prev = 0;
 	chunkid_prev2 = 0;
 
-	outpkt.len = 0;
-	outpkt.seqno = 0;
-	outpkt.fragment = 0;
-	outchunkresent = 0;
+	reset_upstream_packet_state();
 	inpkt.len = 0;
 	inpkt.seqno = 0;
 	inpkt.fragment = 0;
+	handshake_timeout_multiplier = 1;
+	force_base32_upstream = 0;
+	handshake_reply_cache_clear();
+	upstream_queue_clear();
 }
 
 void
@@ -146,9 +756,41 @@ client_set_nameserver(struct sockaddr_storage *addr, int addrlen)
 }
 
 void
+client_set_doh_url(const char *cp)
+{
+	size_t len;
+
+	free(doh_url);
+	doh_url = NULL;
+	if (cp == NULL || cp[0] == '\0')
+		return;
+
+	len = strlen(cp) + 1;
+	doh_url = malloc(len);
+	if (doh_url != NULL)
+		memcpy(doh_url, cp, len);
+}
+
+const char *
+client_get_doh_url(void)
+{
+	return doh_url;
+}
+
+void
 client_set_topdomain(const char *cp)
 {
-	topdomain = cp;
+	size_t len;
+
+	free(topdomain);
+	topdomain = NULL;
+	if (cp == NULL)
+		return;
+
+	len = strlen(cp) + 1;
+	topdomain = malloc(len);
+	if (topdomain != NULL)
+		memcpy(topdomain, cp, len);
 }
 
 void
@@ -168,6 +810,8 @@ client_set_qtype(char *qtype)
 		do_qtype = T_CNAME;
 	else if (!strcasecmp(qtype, "A"))
 		do_qtype = T_A;
+	else if (!strcasecmp(qtype, "AAAA"))
+		do_qtype = T_AAAA;
 	else if (!strcasecmp(qtype, "MX"))
 		do_qtype = T_MX;
 	else if (!strcasecmp(qtype, "SRV"))
@@ -186,6 +830,7 @@ client_get_qtype(void)
 	else if (do_qtype == T_PRIVATE)	c = "PRIVATE";
 	else if (do_qtype == T_CNAME)	c = "CNAME";
 	else if (do_qtype == T_A)	c = "A";
+	else if (do_qtype == T_AAAA)	c = "AAAA";
 	else if (do_qtype == T_MX)	c = "MX";
 	else if (do_qtype == T_SRV)	c = "SRV";
 	else if (do_qtype == T_TXT)	c = "TXT";
@@ -227,6 +872,18 @@ client_set_hostname_maxlen(int i)
 		hostname_maxlen = i;
 }
 
+void
+client_set_handshake_timeout_multiplier(int multiplier)
+{
+	handshake_timeout_multiplier = MAX(1, multiplier);
+}
+
+void
+client_set_force_base32_upstream(int enabled)
+{
+	force_base32_upstream = enabled ? 1 : 0;
+}
+
 const char *
 client_get_raw_addr(void)
 {
@@ -260,7 +917,10 @@ send_query(int fd, char *hostname)
 	fprintf(stderr, "  Sendquery: id %5d name[0] '%c'\n", q.id, hostname[0]);
 #endif
 
-	sendto(fd, packet, len, 0, (struct sockaddr*)&nameserv, nameserv_len);
+	if (resolver_send_packet(packet, len, selecttimeout) < 0) {
+		warn("resolver_send_packet");
+		return;
+	}
 
 	/* There are DNS relays that time out quickly but don't send anything
 	   back on timeout.
@@ -373,6 +1033,10 @@ send_chunk(int fd)
 	datacmc++;
 	if (datacmc >= 36)
 		datacmc = 0;
+
+	client_debugf("Tunnel chunk send: chunkid=%u seq=%d frag=%d offset=%d sentlen=%d avail=%d",
+		      chunkid, outpkt.seqno, outpkt.fragment, outpkt.offset,
+		      outpkt.sentlen, avail);
 
 #if 0
 	fprintf(stderr, "  Send: down %d/%d up %d/%d, %d bytes\n",
@@ -559,9 +1223,8 @@ read_dns_withq(int dns_fd, int tun_fd, char *buf, int buflen, struct query *q)
 	int r;
 
 	addrlen = sizeof(from);
-	if ((r = recvfrom(dns_fd, data, sizeof(data), 0,
-			  (struct sockaddr*)&from, &addrlen)) < 0) {
-		warn("recvfrom");
+	if ((r = resolver_recv_packet(data, sizeof(data), &from, &addrlen)) < 0) {
+		warn("resolver_recv_packet");
 		return -1;
 	}
 
@@ -643,7 +1306,14 @@ read_dns_withq(int dns_fd, int tun_fd, char *buf, int buflen, struct query *q)
 		r -= RAW_HDR_LEN;
 		datalen = sizeof(buf);
 		if (uncompress((uint8_t*)buf, &datalen, (uint8_t*) &data[RAW_HDR_LEN], r) == Z_OK) {
-			write_tun(tun_fd, buf, datalen);
+#ifdef ANDROID
+			repair_ipv4_checksums(buf, (int) datalen);
+#endif
+			debug_log_ip_packet("Tunnel raw downstream write", buf, (int) datalen);
+			if (write_tun(tun_fd, buf, datalen) != 0)
+				client_debugf("Tunnel raw downstream write failed: len=%lu", datalen);
+			else
+				client_debugf("Tunnel raw downstream write ok: len=%lu", datalen);
 		}
 
 		/* don't process any further */
@@ -667,33 +1337,54 @@ handshake_waitdns(int dns_fd, char *buf, int buflen, char c1, char c2, int timeo
 {
 	struct query q;
 	int r, rv;
-	fd_set fds;
-	struct timeval tv;
+	int effective_timeout;
+
+	rv = handshake_reply_cache_take(chunkid, c1, c2, &q, buf, buflen);
+	if (rv != -9999) {
+		client_debugf("Handshake reply cache hit: id=%u name=%s type=%s rcode=%u rv=%d",
+			q.id,
+			q.name[0] ? q.name : "<empty>",
+			debug_qtype_name(q.type),
+			q.rcode,
+			rv);
+		if (rv > 0)
+			debug_print_reply_prefix("Handshake cached payload", buf, rv);
+		return rv;
+	}
 
 	while (1) {
-		tv.tv_sec = timeout;
-		tv.tv_usec = 0;
-		FD_ZERO(&fds);
-		FD_SET(dns_fd, &fds);
-		r = select(dns_fd + 1, &fds, NULL, NULL, &tv);
+		effective_timeout = timeout * handshake_timeout_multiplier;
+		r = resolver_poll(effective_timeout);
 
 		if (r < 0)
-			return -1;	/* select error */
+			return -1;	/* poll error */
 		if (r == 0)
-			return -3;	/* select timeout */
+			return -3;	/* poll timeout */
 
 		q.id = 0;
 		q.name[0] = '\0';
 		rv = read_dns_withq(dns_fd, 0, buf, buflen, &q);
 
 		if (q.id != chunkid || (q.name[0] != c1 && q.name[0] != c2)) {
-#if 0
-			fprintf(stderr, "Ignoring unfitting reply id %d starting with '%c'\n", q.id, q.name[0]);
-#endif
+			handshake_reply_cache_store(&q, rv, rv > 0 ? buf : NULL);
+			client_debugf("Handshake reply mismatch: wanted id=%u name[0]=%c/%c, got id=%u name[0]=%c type=%s rcode=%u rv=%d name=%s",
+				chunkid, c1, c2,
+				q.id,
+				q.name[0] ? q.name[0] : '?',
+				debug_qtype_name(q.type),
+				q.rcode,
+				rv,
+				q.name[0] ? q.name : "<empty>");
 			continue;
 		}
 
 		/* if still here: reply matches our latest query */
+		client_debugf("Handshake reply match: id=%u name=%s type=%s rcode=%u rv=%d",
+			q.id,
+			q.name[0] ? q.name : "<empty>",
+			debug_qtype_name(q.type),
+			q.rcode,
+			rv);
 
 		/* Non-recursive DNS servers (such as [a-m].root-servers.net)
 		   return no answer, but only additional and authority records.
@@ -726,6 +1417,8 @@ handshake_waitdns(int dns_fd, char *buf, int buflen, char c1, char c2, int timeo
 			write_dns_error(&q, 1);
 			return -2;
 		}
+		if (rv > 0)
+			debug_print_reply_prefix("Handshake reply payload", buf, rv);
 		/* rv either 0 or >0, return it as is. */
 		return rv;
 	}
@@ -746,30 +1439,41 @@ tunnel_tun(int tun_fd, int dns_fd)
 	if ((read = read_tun(tun_fd, in, sizeof(in))) <= 0)
 		return -1;
 
-	/* We may be here only to empty the tun device; then return -1
-	   to force continue in select loop. */
-	if (is_sending())
-		return -1;
+	client_debugf("Tunnel tun read: %d bytes, conn=%d, sending=%d",
+		      (int) read, conn, is_sending());
+	debug_log_ip_packet("Tunnel tun read packet", in, (int) read);
+
+#ifdef ANDROID
+	if (debug_extract_ipv4_icmp_echo_request(in, (int) read,
+			&debug_upstream_icmp_request_src_a, &debug_upstream_icmp_request_src_b,
+			&debug_upstream_icmp_request_src_c, &debug_upstream_icmp_request_src_d,
+			&debug_upstream_icmp_request_dst_a, &debug_upstream_icmp_request_dst_b,
+			&debug_upstream_icmp_request_dst_c, &debug_upstream_icmp_request_dst_d,
+			&debug_upstream_icmp_request_id, &debug_upstream_icmp_request_seq)) {
+		debug_upstream_icmp_request_valid = 1;
+		client_debugf("ICMP probe upstream captured: id=%u seq=%u %u.%u.%u.%u -> %u.%u.%u.%u len=%d",
+			      debug_upstream_icmp_request_id, debug_upstream_icmp_request_seq,
+			      debug_upstream_icmp_request_src_a, debug_upstream_icmp_request_src_b,
+			      debug_upstream_icmp_request_src_c, debug_upstream_icmp_request_src_d,
+			      debug_upstream_icmp_request_dst_a, debug_upstream_icmp_request_dst_b,
+			      debug_upstream_icmp_request_dst_c, debug_upstream_icmp_request_dst_d,
+			      (int) read);
+	} else {
+		debug_upstream_icmp_request_valid = 0;
+	}
+#endif
 
 	outlen = sizeof(out);
 	inlen = read;
 	compress2((uint8_t*)out, &outlen, (uint8_t*)in, inlen, 9);
 
-	memcpy(outpkt.data, out, MIN(outlen, sizeof(outpkt.data)));
-	outpkt.sentlen = 0;
-	outpkt.offset = 0;
-	outpkt.seqno = (outpkt.seqno + 1) & 7;
-	outpkt.len = outlen;
-	outpkt.fragment = 0;
-	outchunkresent = 0;
-
-	if (conn == CONN_DNS_NULL) {
-		send_chunk(dns_fd);
-
-		send_ping_soon = 0;
-	} else {
-		send_raw_data(dns_fd);
+	if (is_sending()) {
+		if (upstream_queue_push(out, outlen) < 0)
+			client_debugf("Tunnel tun drop: queue saturated");
+		return read;
 	}
+
+	start_upstream_packet(dns_fd, out, outlen);
 
 	return read;
 }
@@ -992,12 +1696,57 @@ tunnel_dns(int tun_fd, int dns_fd)
 		memcpy(&inpkt.data[inpkt.len], &buf[2], datalen);
 		inpkt.len += datalen;
 
-		if (buf[1] & 1) { /* If last fragment flag is set */
-			/* Uncompress packet and send to tun */
-			/* RE-USES buf[] */
-			datalen = sizeof(buf);
+ 		if (buf[1] & 1) { /* If last fragment flag is set */
+ 			/* Uncompress packet and send to tun */
+ 			/* RE-USES buf[] */
+ 			datalen = sizeof(buf);
+			client_debugf("Tunnel downstream packet complete: seq=%d frag=%d comp_len=%d last_read=%d",
+				      inpkt.seqno, inpkt.fragment, inpkt.len, read);
+#ifdef ANDROID
+			if (inpkt.len >= 8) {
+				const unsigned char *dbg = (const unsigned char *) inpkt.data;
+				client_debugf("Tunnel downstream packet prefix: %02x%02x%02x%02x%02x%02x%02x%02x",
+					      dbg[0], dbg[1], dbg[2], dbg[3],
+					      dbg[4], dbg[5], dbg[6], dbg[7]);
+			}
+#endif
 			if (uncompress((uint8_t*)buf, &datalen, (uint8_t*) inpkt.data, inpkt.len) == Z_OK) {
-				write_tun(tun_fd, buf, datalen);
+#ifdef ANDROID
+				unsigned int src_a, src_b, src_c, src_d;
+				unsigned int dst_a, dst_b, dst_c, dst_d;
+				unsigned int icmp_id, icmp_seq;
+				repair_ipv4_checksums(buf, (int) datalen);
+				if (debug_extract_ipv4_icmp_echo_reply(buf, (int) datalen,
+						&src_a, &src_b, &src_c, &src_d,
+						&dst_a, &dst_b, &dst_c, &dst_d,
+						&icmp_id, &icmp_seq)) {
+					client_debugf("ICMP probe reply parsed: %u.%u.%u.%u -> %u.%u.%u.%u id=%u seq=%u len=%lu",
+						src_a, src_b, src_c, src_d,
+						dst_a, dst_b, dst_c, dst_d,
+						icmp_id, icmp_seq, datalen);
+				}
+#endif
+				debug_log_ip_packet("Tunnel downstream write", buf, (int) datalen);
+				if (write_tun(tun_fd, buf, datalen) != 0)
+					client_debugf("Tunnel downstream write failed: seq=%d frag=%d len=%lu",
+						inpkt.seqno, inpkt.fragment, datalen);
+				else
+					client_debugf("Tunnel downstream write ok: seq=%d frag=%d len=%lu",
+						inpkt.seqno, inpkt.fragment, datalen);
+#ifdef ANDROID
+				if (debug_extract_ipv4_icmp_echo_reply(buf, (int) datalen,
+						&src_a, &src_b, &src_c, &src_d,
+						&dst_a, &dst_b, &dst_c, &dst_d,
+						&icmp_id, &icmp_seq)) {
+					client_debugf("ICMP probe reply delivered to tun: %u.%u.%u.%u -> %u.%u.%u.%u id=%u seq=%u len=%lu",
+						src_a, src_b, src_c, src_d,
+						dst_a, dst_b, dst_c, dst_d,
+						icmp_id, icmp_seq, datalen);
+				}
+#endif
+			} else {
+				client_debugf("Tunnel downstream packet uncompress failed: seq=%d frag=%d comp_len=%d",
+					      inpkt.seqno, inpkt.fragment, inpkt.len);
 			}
 			inpkt.len = 0;
 			/* Keep .seqno and .fragment as is, so that we won't
@@ -1034,14 +1783,42 @@ tunnel_dns(int tun_fd, int dns_fd)
 		if (up_ack_seqno == outpkt.seqno &&
 		    up_ack_fragment == outpkt.fragment) {
 			/* Okay, previously sent fragment has arrived */
+			client_debugf("Tunnel chunk ack: chunkid=%u seq=%d frag=%d sentlen=%d offset=%d len=%d",
+				      q.id, up_ack_seqno, up_ack_fragment, outpkt.sentlen,
+				      outpkt.offset, outpkt.len);
+#ifdef ANDROID
+			if (debug_upstream_icmp_request_valid) {
+				client_debugf("ICMP probe upstream ack: dns_seq=%d frag=%d id=%u icmp_seq=%u",
+					      up_ack_seqno, up_ack_fragment,
+					      debug_upstream_icmp_request_id,
+					      debug_upstream_icmp_request_seq);
+			}
+#endif
 
 			outpkt.offset += outpkt.sentlen;
 			if (outpkt.offset >= outpkt.len) {
 				/* Packet completed */
+				client_debugf("Tunnel chunk complete: seq=%d total_len=%d",
+					      outpkt.seqno, outpkt.len);
+#ifdef ANDROID
+				if (debug_upstream_icmp_request_valid) {
+					client_debugf("ICMP probe upstream complete: dns_seq=%d id=%u icmp_seq=%u",
+						      outpkt.seqno,
+						      debug_upstream_icmp_request_id,
+						      debug_upstream_icmp_request_seq);
+				}
+#endif
 				outpkt.offset = 0;
 				outpkt.len = 0;
 				outpkt.sentlen = 0;
 				outchunkresent = 0;
+				debug_upstream_icmp_request_valid = 0;
+				maybe_send_queued_upstream(dns_fd);
+				if (is_sending()) {
+					send_ping_soon = 0;
+					send_something_now = 0;
+					return read;
+				}
 
 				/* Normally, server still has a query in queue,
 				   but sometimes not. So send a ping.
@@ -1062,6 +1839,10 @@ tunnel_dns(int tun_fd, int dns_fd)
 				send_ping_soon = 0;
 				send_something_now = 0;
 			}
+		} else {
+			client_debugf("Tunnel chunk ack mismatch: got seq=%d frag=%d expected seq=%d frag=%d qid=%u",
+				      up_ack_seqno, up_ack_fragment, outpkt.seqno,
+				      outpkt.fragment, q.id);
 		}
 		/* else: Some wrong fragment has arrived, or old fragment is
 		   acked again, mostly by ping responses.
@@ -1084,6 +1865,8 @@ client_tunnel(int tun_fd, int dns_fd)
 {
 	struct timeval tv;
 	fd_set fds;
+	int dns_select_fd;
+	int maxfd;
 	int rv;
 	int i;
 
@@ -1092,6 +1875,12 @@ client_tunnel(int tun_fd, int dns_fd)
 	send_query_sendcnt = 0;  /* start counting now */
 
 	while (running) {
+		if (resolver_get_transport() == RESOLVER_TRANSPORT_DOH &&
+		    resolver_has_pending()) {
+			if (tunnel_dns(tun_fd, dns_fd) <= 0)
+				continue;
+		}
+
 		tv.tv_sec = selecttimeout;
 		tv.tv_usec = 0;
 
@@ -1107,6 +1896,7 @@ client_tunnel(int tun_fd, int dns_fd)
 		}
 
 		FD_ZERO(&fds);
+		maxfd = -1;
 		if (!is_sending() || outchunkresent >= 2) {
 			/* If re-sending upstream data, chances are that
 			   we're several seconds behind already and TCP
@@ -1115,15 +1905,21 @@ client_tunnel(int tun_fd, int dns_fd)
 			   Get up-to-date fast by simply dropping stuff,
 			   that's what TCP is designed to handle. */
 			FD_SET(tun_fd, &fds);
+			maxfd = tun_fd;
 		}
-		FD_SET(dns_fd, &fds);
+		dns_select_fd = resolver_get_fd();
+		if (dns_select_fd >= 0) {
+			FD_SET(dns_select_fd, &fds);
+			maxfd = MAX(maxfd, dns_select_fd);
+		}
 
-		i = select(MAX(tun_fd, dns_fd) + 1, &fds, NULL, NULL, &tv);
+		i = select(maxfd + 1, &fds, NULL, NULL, &tv);
 
- 		if (lastdownstreamtime + 60 < time(NULL)) {
- 			warnx("No downstream data received in 60 seconds, shutting down.");
- 			running = 0;
- 		}
+		if (lastdownstreamtime + 60 < time(NULL)) {
+			client_debugf("Tunnel exit reason: no downstream data for 60 seconds.");
+			warnx("No downstream data received in 60 seconds, shutting down.");
+			running = 0;
+		}
 
 		if (running == 0)
 			break;
@@ -1131,6 +1927,7 @@ client_tunnel(int tun_fd, int dns_fd)
 		if (i < 0) {
 			if (!running)
 				break;
+			client_debugf("Tunnel exit reason: select() failed: %s", strerror(errno));
 			warn("select");
 			break;
 		}
@@ -1172,13 +1969,14 @@ client_tunnel(int tun_fd, int dns_fd)
 				   we need to _not_ do tunnel_dns() then.
 				   If chunk sent, sets send_ping_soon=0. */
 			}
-			if (FD_ISSET(dns_fd, &fds)) {
+			if (dns_select_fd >= 0 && FD_ISSET(dns_select_fd, &fds)) {
 				if (tunnel_dns(tun_fd, dns_fd) <= 0)
 					continue;
 			}
 		}
 	}
 
+	client_debugf("Tunnel loop exiting: running=%d", running);
 	return rv;
 }
 
@@ -1348,7 +2146,7 @@ handshake_version(int dns_fd, int *seed)
 
 		read = handshake_waitdns(dns_fd, in, sizeof(in), 'v', 'V', i+1);
 
-		if (read >= 9) {
+		if (read >= 8) {
 			payload =  (((in[4] & 0xff) << 24) |
 					((in[5] & 0xff) << 16) |
 					((in[6] & 0xff) << 8) |
@@ -1356,7 +2154,12 @@ handshake_version(int dns_fd, int *seed)
 
 			if (strncmp("VACK", in, 4) == 0) {
 				*seed = payload;
-				userid = in[8];
+				if (read >= 9) {
+					userid = in[8];
+				} else {
+					userid = 0;
+					client_debugf("Version handshake accepted short VACK without userid byte; assuming user #0");
+				}
 				userid_char = hex[userid & 15];
 				userid_char2 = hex2[userid & 15];
 
@@ -1371,8 +2174,11 @@ handshake_version(int dns_fd, int *seed)
 				warnx("Server full, all %d slots are taken. Try again later", payload);
 				return 1;
 			}
-		} else if (read > 0)
-			warnx("did not receive proper login challenge");
+			debug_print_reply_prefix("Version handshake unexpected payload", in, read);
+		} else if (read > 0) {
+			debug_print_reply_prefix("Version handshake short payload", in, read);
+			warnx("did not receive proper version reply");
+		}
 
 		fprintf(stderr, "Retrying version check...\n");
 	}
@@ -1401,7 +2207,8 @@ handshake_login(int dns_fd, int seed)
 
 		if (read > 0) {
 			int netmask;
-			if (strncmp("LNAK", in, 4) == 0) {
+			if (strncmp("LNAK", in, 4) == 0 ||
+			    (read == 3 && strncmp("LNA", in, 3) == 0)) {
 				fprintf(stderr, "Bad password\n");
 				return 1;
 			} else if (strncmp("BADIP", in, 5) == 0) {
@@ -1428,6 +2235,7 @@ handshake_login(int dns_fd, int seed)
 					errx(4, "Failed to set IP and MTU");
 				}
 			} else {
+				debug_print_reply_prefix("Login handshake unexpected payload", in, read);
 				fprintf(stderr, "Received bad handshake\n");
 			}
 		}
@@ -1850,6 +2658,7 @@ handshake_qtype_numcvt(int num)
 	case 4:	return T_MX;
 	case 5:	return T_CNAME;
 	case 6:	return T_A;
+	case 7:	return T_AAAA;
 	}
 	return T_UNSET;
 }
@@ -2302,7 +3111,7 @@ handshake_autoprobe_fragsize(int dns_fd)
 	return max_fragsize - 2;
 }
 
-static void
+static int
 handshake_set_fragsize(int dns_fd, int fragsize)
 {
 	char in[4096];
@@ -2320,23 +3129,24 @@ handshake_set_fragsize(int dns_fd, int fragsize)
 
 			if (strncmp("BADFRAG", in, 7) == 0) {
 				fprintf(stderr, "Server rejected fragsize. Keeping default.");
-				return;
+				return 0;
 			} else if (strncmp("BADIP", in, 5) == 0) {
 				fprintf(stderr, "Server rejected sender IP address.\n");
-				return;
+				return -1;
 			}
 
 			/* The server returns the accepted fragsize:
 			accepted_fragsize = ((in[0] & 0xff) << 8) | (in[1] & 0xff) */
-			return;
+			return 1;
 		}
 
 		fprintf(stderr, "Retrying set fragsize...\n");
 	}
 	if (!running)
-		return;
+		return 0;
 
 	fprintf(stderr, "No reply from server when setting fragsize. Keeping default.\n");
+	return 0;
 }
 
 int
@@ -2345,6 +3155,22 @@ client_handshake(int dns_fd, int raw_mode, int autodetect_frag_size, int fragsiz
 	int seed;
 	int upcodec;
 	int r;
+
+	resolver_close();
+	if (doh_url != NULL) {
+		if (resolver_init_doh(doh_url) != 0) {
+			warnx("Failed to initialize DoH transport for %s: %s",
+			      doh_url, strerror(errno));
+			return 1;
+		}
+		if (raw_mode) {
+			fprintf(stderr, "Skipping raw mode for DoH transport\n");
+			raw_mode = 0;
+		}
+	} else if (resolver_init_udp(dns_fd, &nameserv, nameserv_len) != 0) {
+		warn("resolver_init_udp");
+		return 1;
+	}
 
 	dnsc_use_edns0 = 0;
 
@@ -2386,19 +3212,24 @@ client_handshake(int dns_fd, int raw_mode, int autodetect_frag_size, int fragsiz
 			dnsc_use_edns0 = 0;
 		}
 
-		upcodec = handshake_upenc_autodetect(dns_fd);
-		if (!running)
-			return -1;
+		if (force_base32_upstream) {
+			fprintf(stderr, "Keeping upstream codec Base32 for conservative transport profile\n");
+			client_debugf("Handshake stage: keeping upstream codec Base32 for conservative transport profile");
+		} else {
+			upcodec = handshake_upenc_autodetect(dns_fd);
+			if (!running)
+				return -1;
 
-		if (upcodec == 1) {
-			handshake_switch_codec(dns_fd, 6);
-		} else if (upcodec == 2) {
-			handshake_switch_codec(dns_fd, 26);
-		} else if (upcodec == 3) {
-			handshake_switch_codec(dns_fd, 7);
+			if (upcodec == 1) {
+				handshake_switch_codec(dns_fd, 6);
+			} else if (upcodec == 2) {
+				handshake_switch_codec(dns_fd, 26);
+			} else if (upcodec == 3) {
+				handshake_switch_codec(dns_fd, 7);
+			}
+			if (!running)
+				return -1;
 		}
-		if (!running)
-			return -1;
 
 		if (downenc == ' ') {
 			downenc = handshake_downenc_autodetect(dns_fd);
@@ -2412,24 +3243,40 @@ client_handshake(int dns_fd, int raw_mode, int autodetect_frag_size, int fragsiz
 		if (!running)
 			return -1;
 
+		client_debugf("Handshake stage: downstream codec selected, lazymode=%d autodetect_frag_size=%d fragsize=%d\n",
+		              lazymode, autodetect_frag_size, fragsize);
+
 		if (lazymode) {
+			client_debugf("Handshake stage: trying lazy mode\n");
 			handshake_try_lazy(dns_fd);
 		}
 		if (!running)
 			return -1;
 
 		if (autodetect_frag_size) {
+			client_debugf("Handshake stage: autoprobing downstream fragment size\n");
 			fragsize = handshake_autoprobe_fragsize(dns_fd);
 			if (!fragsize) {
+				client_debugf("Handshake stage: downstream fragment autoprobe failed\n");
 				return 1;
 			}
+			client_debugf("Handshake stage: downstream fragment autoprobe chose %d\n", fragsize);
 		}
 
-		handshake_set_fragsize(dns_fd, fragsize);
+		client_debugf("Handshake stage: setting downstream fragment size to %d\n", fragsize);
+		r = handshake_set_fragsize(dns_fd, fragsize);
+		if (r < 0) {
+			client_debugf("Handshake stage: downstream fragment size rejected with BADIP\n");
+			return 1;
+		}
 		if (!running)
 			return -1;
+
+	client_debugf("Handshake stage: completed successfully\n");
 	}
+
+	reset_upstream_packet_state();
+	client_debugf("Handshake stage: upstream packet state reset before tunnel loop");
 
 	return 0;
 }
-

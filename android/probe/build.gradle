@@ -3,15 +3,14 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-def defaultDomain = System.getenv("IODINE_ANDROID_DEFAULT_DOMAIN") ?: ""
-def defaultPassword = System.getenv("IODINE_ANDROID_DEFAULT_PASSWORD") ?: ""
-
 android {
-    namespace "se.kryo.iodine"
+    namespace "se.kryo.iodine.probe"
     compileSdk 34
 
-    buildFeatures {
-        buildConfig true
+    externalNativeBuild {
+        cmake {
+            path file("src/main/cpp/CMakeLists.txt")
+        }
     }
 
     signingConfigs {
@@ -24,24 +23,26 @@ android {
     }
 
     defaultConfig {
-        applicationId "se.kryo.iodine"
+        applicationId "se.kryo.iodine.probe"
         minSdk 21
         targetSdk 34
         versionCode 1
-        versionName "0.8.0-dev"
+        versionName "0.1.0"
+
+        externalNativeBuild {
+            cmake {
+                cppFlags ""
+            }
+        }
     }
 
     buildTypes {
         debug {
             minifyEnabled false
             signingConfig signingConfigs.debug
-            buildConfigField("String", "DEFAULT_DOMAIN", groovy.json.JsonOutput.toJson(defaultDomain))
-            buildConfigField("String", "DEFAULT_PASSWORD", groovy.json.JsonOutput.toJson(defaultPassword))
         }
         release {
             minifyEnabled false
-            buildConfigField("String", "DEFAULT_DOMAIN", "\"\"")
-            buildConfigField("String", "DEFAULT_PASSWORD", "\"\"")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -63,6 +64,5 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
-    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

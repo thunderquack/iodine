@@ -23,6 +23,7 @@ link)
 			"$PKG_CONFIG" --exists libselinux && FLAGS="$FLAGS $($PKG_CONFIG --libs libselinux)";
 			"$PKG_CONFIG" --exists libsystemd-daemon && FLAGS="$FLAGS $($PKG_CONFIG --libs libsystemd-daemon)";
 			"$PKG_CONFIG" --exists libsystemd && FLAGS="$FLAGS $($PKG_CONFIG --libs libsystemd)";
+			"$PKG_CONFIG" --exists libcurl && FLAGS="$FLAGS $($PKG_CONFIG --libs libcurl)";
 			echo $FLAGS;
 		;;
 	esac
@@ -46,6 +47,7 @@ cflags)
 			"$PKG_CONFIG" --exists libselinux && FLAGS="$FLAGS -DHAVE_SETCON";
 			"$PKG_CONFIG" --exists libsystemd-daemon && FLAGS="$FLAGS -DHAVE_SYSTEMD";
 			"$PKG_CONFIG" --exists libsystemd && FLAGS="$FLAGS -DHAVE_SYSTEMD";
+			"$PKG_CONFIG" --exists libcurl && FLAGS="$FLAGS -DHAVE_LIBCURL $($PKG_CONFIG --cflags libcurl)";
 			echo $FLAGS;
 		;;
 		GNU/kFreeBSD|GNU)

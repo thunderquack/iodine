@@ -90,7 +90,7 @@ int dns_encode(char *buf, size_t buflen, struct query *q, qr_t qr,
 
 		/* Answer section */
 
-		if (q->type == T_CNAME || q->type == T_A) {
+		if (q->type == T_CNAME || q->type == T_A || q->type == T_AAAA) {
 			/* data is expected to be like
 			 * "Hblabla.host.name.com\0" */
 
@@ -99,8 +99,8 @@ int dns_encode(char *buf, size_t buflen, struct query *q, qr_t qr,
 
 			CHECKLEN(10);
 			putshort(&p, name);
-			if (q->type == T_A)
-				/* answer CNAME to A question */
+			if (q->type == T_A || q->type == T_AAAA)
+				/* answer CNAME to A/AAAA question */
 				putshort(&p, T_CNAME);
 			else
 				putshort(&p, q->type);
@@ -560,7 +560,7 @@ int dns_decode(char *buf, size_t buflen, struct query *q, qr_t qr, char *packet,
 				rv = 0;
 			}
 		}
-		else if ((type == T_A || type == T_CNAME) && buf) {
+		else if ((type == T_A || type == T_AAAA || type == T_CNAME) && buf) {
 			/* Assume that first answer is what we wanted */
 			readname(packet, packetlen, &data, name, sizeof(name));
 			CHECKLEN(10);
@@ -570,7 +570,7 @@ int dns_decode(char *buf, size_t buflen, struct query *q, qr_t qr, char *packet,
 			readshort(packet, &data, &rlen);
 
 			if (type == T_CNAME) {
-				/* For tunnels, query type A has CNAME type answer */
+				/* For tunnels, query type A/AAAA has CNAME type answer */
 				memset(name, 0, sizeof(name));
 				readname(packet, packetlen, &data, name, sizeof(name) - 1);
 				name[sizeof(name)-1] = '\0';

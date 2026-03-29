@@ -700,6 +700,61 @@ static int send_chunk_or_dataless(int dns_fd, int userid, struct query *q)
 	return 0;	/* don't call us again */
 }
 
+static int
+debug_extract_ipv4_icmp(const char *buf, int len,
+			unsigned int *src_a, unsigned int *src_b, unsigned int *src_c, unsigned int *src_d,
+			unsigned int *dst_a, unsigned int *dst_b, unsigned int *dst_c, unsigned int *dst_d,
+			unsigned int *icmp_type, unsigned int *icmp_code,
+			unsigned int *icmp_id, unsigned int *icmp_seq)
+{
+	const unsigned char *pkt = (const unsigned char *) buf;
+	unsigned int ihl;
+
+	if (len < 20)
+		return 0;
+	if ((pkt[0] >> 4) != 4)
+		return 0;
+
+	ihl = (pkt[0] & 0x0f) * 4;
+	if (ihl < 20 || len < (int) (ihl + 8))
+		return 0;
+	if (pkt[9] != 1)
+		return 0;
+
+	*src_a = pkt[12];
+	*src_b = pkt[13];
+	*src_c = pkt[14];
+	*src_d = pkt[15];
+	*dst_a = pkt[16];
+	*dst_b = pkt[17];
+	*dst_c = pkt[18];
+	*dst_d = pkt[19];
+	*icmp_type = pkt[ihl + 0];
+	*icmp_code = pkt[ihl + 1];
+	*icmp_id = ((unsigned int) pkt[ihl + 4] << 8) | pkt[ihl + 5];
+	*icmp_seq = ((unsigned int) pkt[ihl + 6] << 8) | pkt[ihl + 7];
+	return 1;
+}
+
+static void
+debug_log_server_icmp_packet(const char *prefix, const char *buf, int len, int userid)
+{
+	unsigned int src_a, src_b, src_c, src_d;
+	unsigned int dst_a, dst_b, dst_c, dst_d;
+	unsigned int icmp_type, icmp_code, icmp_id, icmp_seq;
+
+	if (!debug_extract_ipv4_icmp(buf, len,
+			&src_a, &src_b, &src_c, &src_d,
+			&dst_a, &dst_b, &dst_c, &dst_d,
+			&icmp_type, &icmp_code, &icmp_id, &icmp_seq))
+		return;
+
+	debug_log_stderr("%s: type=%u code=%u id=%u seq=%u %u.%u.%u.%u -> %u.%u.%u.%u len=%d user=%d\n",
+		prefix, icmp_type, icmp_code, icmp_id, icmp_seq,
+		src_a, src_b, src_c, src_d,
+		dst_a, dst_b, dst_c, dst_d, len, userid);
+}
+
 static int tunnel_tun(int tun_fd, struct dnsfd *dns_fds)
 {
 	unsigned long outlen;
@@ -714,9 +769,19 @@ static int tunnel_tun(int tun_fd, struct dnsfd *dns_fds)
 
 	/* find target ip in packet, in is padded with 4 bytes TUN header */
 	header = (struct ip*) (in + 4);
+#if 1
+	if (debug >= 1)
+		debug_log_server_icmp_packet("SRV tun read raw", in + 4, read - 4, -1);
+#endif
 	userid = find_user_by_ip(header->ip_dst.s_addr);
-	if (userid < 0)
+	if (userid < 0) {
+		if (debug >= 1)
+			debug_log_server_icmp_packet("SRV tun read unmapped", in + 4, read - 4, -1);
 		return 0;
+	}
+
+	if (debug >= 1)
+		debug_log_server_icmp_packet("SRV tun read", in + 4, read - 4, userid);
 
 	outlen = sizeof(out);
 	compress2((uint8_t*)out, &outlen, (uint8_t*)in, read, 9);
@@ -727,12 +792,16 @@ static int tunnel_tun(int tun_fd, struct dnsfd *dns_fds)
 		   If the queue is full, drop the packet. TCP will hopefully notice
 		   and reduce the packet rate. */
 		if (users[userid].outpacket.len > 0) {
+			if (debug >= 1)
+				debug_log_server_icmp_packet("SRV tun queue", in + 4, read - 4, userid);
 			save_to_outpacketq(userid, out, outlen);
 			return 0;
 		}
 #endif
 
 		start_new_outpacket(userid, out, outlen);
+		if (debug >= 1)
+			debug_log_server_icmp_packet("SRV outpacket start", in + 4, read - 4, userid);
 
 		/* Start sending immediately if query is waiting */
 		if (users[userid].q_sendrealsoon.id != 0) {
@@ -1124,7 +1193,8 @@ handle_null_request(int tun_fd, int dns_fd, struct dnsfd *dns_fds, struct query 
 		case 't':
 			if (q->type == T_TXT ||
 			    q->type == T_SRV || q->type == T_MX ||
-			    q->type == T_CNAME || q->type == T_A) {
+			    q->type == T_CNAME || q->type == T_A ||
+			    q->type == T_AAAA) {
 				write_dns(dns_fd, q, datap, datalen, 'T');
 				return;
 			}
@@ -1133,7 +1203,8 @@ handle_null_request(int tun_fd, int dns_fd, struct dnsfd *dns_fds, struct query 
 		case 's':
 			if (q->type == T_TXT ||
 			    q->type == T_SRV || q->type == T_MX ||
-			    q->type == T_CNAME || q->type == T_A) {
+			    q->type == T_CNAME || q->type == T_A ||
+			    q->type == T_AAAA) {
 				write_dns(dns_fd, q, datap, datalen, 'S');
 				return;
 			}
@@ -1142,7 +1213,8 @@ handle_null_request(int tun_fd, int dns_fd, struct dnsfd *dns_fds, struct query 
 		case 'u':
 			if (q->type == T_TXT ||
 			    q->type == T_SRV || q->type == T_MX ||
-			    q->type == T_CNAME || q->type == T_A) {
+			    q->type == T_CNAME || q->type == T_A ||
+			    q->type == T_AAAA) {
 				write_dns(dns_fd, q, datap, datalen, 'U');
 				return;
 			}
@@ -1151,7 +1223,8 @@ handle_null_request(int tun_fd, int dns_fd, struct dnsfd *dns_fds, struct query 
 		case 'v':
 			if (q->type == T_TXT ||
 			    q->type == T_SRV || q->type == T_MX ||
-			    q->type == T_CNAME || q->type == T_A) {
+			    q->type == T_CNAME || q->type == T_A ||
+			    q->type == T_AAAA) {
 				write_dns(dns_fd, q, datap, datalen, 'V');
 				return;
 			}
@@ -1816,6 +1889,7 @@ tunnel_dns(int tun_fd, int dns_fd, struct dnsfd *dns_fds, int bind_fd)
 		case T_PRIVATE:
 		case T_CNAME:
 		case T_A:
+		case T_AAAA:
 		case T_MX:
 		case T_SRV:
 		case T_TXT:
@@ -2063,10 +2137,11 @@ handle_raw_data(char *packet, int len, struct query *q, struct dnsfd *dns_fds, i
 	users[userid].inpacket.offset = 0;
 	memcpy(users[userid].inpacket.data, packet, len);
 	users[userid].inpacket.len = len;
+	users[userid].raw_packet_seqno++;
 
 	if (debug >= 1) {
-		debug_log_stderr("IN   pkt raw, total %d, from user %d\n",
-			users[userid].inpacket.len, userid);
+		debug_log_stderr("IN   pkt raw# %u, total %d, from user %d\n",
+			users[userid].raw_packet_seqno, users[userid].inpacket.len, userid);
 	}
 
 	handle_full_packet(tun_fd, dns_fds, userid);
@@ -2281,7 +2356,7 @@ write_dns(int fd, struct query *q, const char *data, int datalen, char downenc)
 	char buf[64*1024];
 	int len = 0;
 
-	if (q->type == T_CNAME || q->type == T_A) {
+	if (q->type == T_CNAME || q->type == T_A || q->type == T_AAAA) {
 		char cnamebuf[1024];		/* max 255 */
 
 		write_dns_nameenc(cnamebuf, sizeof(cnamebuf),

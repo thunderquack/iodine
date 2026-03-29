@@ -167,56 +167,66 @@ static int base32_decode(void *buf, size_t *buflen, const char *str,
 	unsigned char *ubuf = (unsigned char *) buf;
 	int iout = 0;	/* to-be-filled output byte */
 	int iin = 0;	/* next input char to use in decoding */
+	int remain;
+	int base;
 
 	base32_reverse_init();
 
-	/* Note: Don't bother to optimize manually. GCC optimizes
-	   better(!) when using simplistic array indexing. */
-
 	while (1) {
-		if (iout >= *buflen || iin + 1 >= slen ||
-		    str[iin] == '\0' || str[iin + 1] == '\0')
-			break;
-		ubuf[iout] = ((REV32(str[iin]) & 0x1f) << 3) |
-			     ((REV32(str[iin + 1]) & 0x1c) >> 2);
-		iin++;  		/* 0 used up, iin=1 */
-		iout++;
+		remain = 0;
+		while (remain < 8 && iin + remain < slen && str[iin + remain] != '\0')
+			remain++;
 
-		if (iout >= *buflen || iin + 2 >= slen ||
-		    str[iin] == '\0' || str[iin + 1] == '\0' ||
-		    str[iin + 2] == '\0')
+		if (iout >= *buflen || remain < 2)
 			break;
-		ubuf[iout] = ((REV32(str[iin]) & 0x03) << 6) |
-			     ((REV32(str[iin + 1]) & 0x1f) << 1) |
-			     ((REV32(str[iin + 2]) & 0x10) >> 4);
-		iin += 2;  		/* 1,2 used up, iin=3 */
-		iout++;
+		base = iin;
 
-		if (iout >= *buflen || iin + 1 >= slen ||
-		    str[iin] == '\0' || str[iin + 1] == '\0')
-			break;
-		ubuf[iout] = ((REV32(str[iin]) & 0x0f) << 4) |
-			     ((REV32(str[iin + 1]) & 0x1e) >> 1);
-		iin++;  		/* 3 used up, iin=4 */
+		ubuf[iout] = ((REV32(str[base]) & 0x1f) << 3) |
+			     ((REV32(str[base + 1]) & 0x1c) >> 2);
 		iout++;
+		if (remain < 4) {
+			iin += remain;
+			break;
+		}
 
-		if (iout >= *buflen || iin + 2 >= slen ||
-		    str[iin] == '\0' || str[iin + 1] == '\0' ||
-		    str[iin + 2] == '\0')
+		if (iout >= *buflen)
 			break;
-		ubuf[iout] = ((REV32(str[iin]) & 0x01) << 7) |
-			     ((REV32(str[iin + 1]) & 0x1f) << 2) |
-			     ((REV32(str[iin + 2]) & 0x18) >> 3);
-		iin += 2;  		/* 4,5 used up, iin=6 */
+		ubuf[iout] = ((REV32(str[base + 1]) & 0x03) << 6) |
+			     ((REV32(str[base + 2]) & 0x1f) << 1) |
+			     ((REV32(str[base + 3]) & 0x10) >> 4);
 		iout++;
+		if (remain < 5) {
+			iin += remain;
+			break;
+		}
 
-		if (iout >= *buflen || iin + 1 >= slen ||
-		    str[iin] == '\0' || str[iin + 1] == '\0')
+		if (iout >= *buflen)
 			break;
-		ubuf[iout] = ((REV32(str[iin]) & 0x07) << 5) |
-			     ((REV32(str[iin + 1]) & 0x1f));
-		iin += 2;  		/* 6,7 used up, iin=8 */
+		ubuf[iout] = ((REV32(str[base + 3]) & 0x0f) << 4) |
+			     ((REV32(str[base + 4]) & 0x1e) >> 1);
 		iout++;
+		if (remain < 7) {
+			iin += remain;
+			break;
+		}
+
+		if (iout >= *buflen)
+			break;
+		ubuf[iout] = ((REV32(str[base + 4]) & 0x01) << 7) |
+			     ((REV32(str[base + 5]) & 0x1f) << 2) |
+			     ((REV32(str[base + 6]) & 0x18) >> 3);
+		iout++;
+		if (remain < 8) {
+			iin += remain;
+			break;
+		}
+
+		if (iout >= *buflen)
+			break;
+		ubuf[iout] = ((REV32(str[base + 6]) & 0x07) << 5) |
+			     ((REV32(str[base + 7]) & 0x1f));
+		iout++;
+		iin += 8;
 	}
 
 	ubuf[iout] = '\0';

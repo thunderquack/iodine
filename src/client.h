@@ -25,6 +25,8 @@ enum connection client_get_conn(void);
 const char *client_get_raw_addr(void);
 
 void client_set_nameserver(struct sockaddr_storage *, int);
+void client_set_doh_url(const char *cp);
+const char *client_get_doh_url(void);
 void client_set_topdomain(const char *cp);
 void client_set_password(const char *cp);
 int client_set_qtype(char *qtype);
@@ -33,6 +35,8 @@ void client_set_downenc(char *encoding);
 void client_set_selecttimeout(int select_timeout);
 void client_set_lazymode(int lazy_mode);
 void client_set_hostname_maxlen(int i);
+void client_set_handshake_timeout_multiplier(int multiplier);
+void client_set_force_base32_upstream(int enabled);
 
 int client_handshake(int dns_fd, int raw_mode, int autodetect_frag_size,
 		     int fragsize);

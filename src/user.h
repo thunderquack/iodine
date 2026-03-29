@@ -49,6 +49,7 @@ struct tun_user {
 	struct query q;
 	struct query q_sendrealsoon;
 	int q_sendrealsoon_new;
+	unsigned int raw_packet_seqno;
 	struct packet inpacket;
 	struct packet outpacket;
 	int outfragresent;
