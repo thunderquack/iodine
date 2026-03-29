@@ -14,7 +14,11 @@ import androidx.appcompat.app.AppCompatActivity
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executors
@@ -23,7 +27,9 @@ class ProbeActivity : AppCompatActivity() {
     private val executor = Executors.newSingleThreadExecutor()
     private lateinit var logView: TextView
     private lateinit var logFile: File
+    private var activeNetwork: Network? = null
     private var activeInterfaceName: String? = null
+    private var activeDnsServers: List<InetAddress> = emptyList()
 
     external fun nativePingIcmp(target: String, count: Int, timeoutMs: Int): String
 
@@ -59,6 +65,7 @@ class ProbeActivity : AppCompatActivity() {
         val active = manager.activeNetwork
         val capabilities = active?.let { manager.getNetworkCapabilities(it) }
         val linkProperties = active?.let { manager.getLinkProperties(it) }
+        activeNetwork = active
         appendLog("network active=${active != null}")
         if (active != null) {
             val bound = manager.bindProcessToNetwork(active)
@@ -75,6 +82,7 @@ class ProbeActivity : AppCompatActivity() {
         }
         if (linkProperties != null) {
             activeInterfaceName = linkProperties.interfaceName
+            activeDnsServers = linkProperties.dnsServers
             appendLog("network iface=${linkProperties.interfaceName}")
             val dns = linkProperties.dnsServers.joinToString(", ") { it.hostAddress ?: "?" }
             appendLog("network dns=$dns")
@@ -88,13 +96,15 @@ class ProbeActivity : AppCompatActivity() {
 
     private fun runDns(target: String) {
         appendLog("DNS start: $target")
+        val startedAt = System.nanoTime()
         try {
             val addresses = InetAddress.getAllByName(target).joinToString(", ") { it.hostAddress ?: "?" }
-            appendLog("DNS ok: $target -> $addresses")
+            appendLog("DNS ok after ${elapsedMs(startedAt)}ms: $target -> $addresses")
         } catch (t: Throwable) {
-            appendLog("DNS failed: $target -> ${t.javaClass.simpleName}: ${t.message}")
+            appendLog("DNS failed after ${elapsedMs(startedAt)}ms: $target -> ${t.javaClass.simpleName}: ${t.message}")
         }
         runExplicitDns(target)
+        runUdpDns(target)
     }
 
     private fun runExplicitDns(target: String) {
@@ -109,6 +119,7 @@ class ProbeActivity : AppCompatActivity() {
             return
         }
         appendLog("DNS explicit start: $target")
+        val startedAt = System.nanoTime()
         val latch = CountDownLatch(1)
         var result: String? = null
         var error: String? = null
@@ -131,13 +142,43 @@ class ProbeActivity : AppCompatActivity() {
             }
         )
         if (!latch.await(8, TimeUnit.SECONDS)) {
-            appendLog("DNS explicit timeout after 8s")
+            appendLog("DNS explicit timeout after ${elapsedMs(startedAt)}ms")
             return
         }
         if (result != null) {
-            appendLog("DNS explicit ok: $target -> $result")
+            appendLog("DNS explicit ok after ${elapsedMs(startedAt)}ms: $target -> $result")
         } else {
-            appendLog("DNS explicit failed: $target -> $error")
+            appendLog("DNS explicit failed after ${elapsedMs(startedAt)}ms: $target -> $error")
+        }
+    }
+
+    private fun runUdpDns(target: String) {
+        val network = activeNetwork
+        val dnsServer = activeDnsServers.firstOrNull()
+        if (network == null || dnsServer == null) {
+            appendLog("DNS udp skipped: network=${network != null} dnsServer=${dnsServer != null}")
+            return
+        }
+        val startedAt = System.nanoTime()
+        appendLog("DNS udp start: $target via ${dnsServer.hostAddress}")
+        try {
+            val queryId = 0x4242
+            val question = buildDnsQuery(queryId, target)
+            val socket = DatagramSocket()
+            socket.soTimeout = 4000
+            network.bindSocket(socket)
+            socket.connect(InetSocketAddress(dnsServer, 53))
+            socket.send(DatagramPacket(question, question.size))
+
+            val buf = ByteArray(1500)
+            val reply = DatagramPacket(buf, buf.size)
+            socket.receive(reply)
+            socket.close()
+
+            val summary = parseDnsAnswerSummary(reply.data, reply.length)
+            appendLog("DNS udp ok after ${elapsedMs(startedAt)}ms: id=${queryId} len=${reply.length} $summary")
+        } catch (t: Throwable) {
+            appendLog("DNS udp failed after ${elapsedMs(startedAt)}ms: $target -> ${t.javaClass.simpleName}: ${t.message}")
         }
     }
 
@@ -220,5 +261,45 @@ class ProbeActivity : AppCompatActivity() {
         init {
             System.loadLibrary("iodine_probe")
         }
+    }
+
+    private fun elapsedMs(startedAt: Long): Long =
+        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
+
+    private fun buildDnsQuery(id: Int, host: String): ByteArray {
+        val out = ArrayList<Byte>()
+        out += ((id ushr 8) and 0xff).toByte()
+        out += (id and 0xff).toByte()
+        out += 0x01
+        out += 0x00
+        out += 0x00
+        out += 0x01
+        out += 0x00
+        out += 0x00
+        out += 0x00
+        out += 0x00
+        out += 0x00
+        out += 0x00
+        host.split('.').forEach { label ->
+            val bytes = label.toByteArray(StandardCharsets.US_ASCII)
+            out += bytes.size.toByte()
+            bytes.forEach { out += it }
+        }
+        out += 0x00
+        out += 0x00
+        out += 0x01
+        out += 0x00
+        out += 0x01
+        return out.toByteArray()
+    }
+
+    private fun parseDnsAnswerSummary(buf: ByteArray, len: Int): String {
+        if (len < 12) {
+            return "short-reply"
+        }
+        val rcode = buf[3].toInt() and 0x0f
+        val qd = ((buf[4].toInt() and 0xff) shl 8) or (buf[5].toInt() and 0xff)
+        val an = ((buf[6].toInt() and 0xff) shl 8) or (buf[7].toInt() and 0xff)
+        return "rcode=$rcode qd=$qd an=$an"
     }
 }
