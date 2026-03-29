@@ -331,6 +331,46 @@ debug_log_ip_packet(const char *stage, const char *buf, int len)
 	client_debugf("%s: unknown IP version=%u len=%d", stage, ipver, len);
 }
 
+static int
+debug_extract_ipv4_icmp_echo_reply(const char *buf, int len,
+	unsigned int *src_a, unsigned int *src_b, unsigned int *src_c, unsigned int *src_d,
+	unsigned int *dst_a, unsigned int *dst_b, unsigned int *dst_c, unsigned int *dst_d,
+	unsigned int *icmp_id, unsigned int *icmp_seq)
+{
+	const unsigned char *pkt = (const unsigned char *) buf;
+	unsigned int ihl;
+
+	if (len < 5)
+		return 0;
+
+	pkt += 4;
+	len -= 4;
+	if (len < 28)
+		return 0;
+	if ((pkt[0] >> 4) != 4)
+		return 0;
+
+	ihl = (pkt[0] & 0x0f) * 4;
+	if (ihl < 20 || len < (int) (ihl + 8))
+		return 0;
+	if (pkt[9] != 1)
+		return 0;
+	if (pkt[ihl] != 0 || pkt[ihl + 1] != 0)
+		return 0;
+
+	*src_a = pkt[12];
+	*src_b = pkt[13];
+	*src_c = pkt[14];
+	*src_d = pkt[15];
+	*dst_a = pkt[16];
+	*dst_b = pkt[17];
+	*dst_c = pkt[18];
+	*dst_d = pkt[19];
+	*icmp_id = ((unsigned int) pkt[ihl + 4] << 8) | pkt[ihl + 5];
+	*icmp_seq = ((unsigned int) pkt[ihl + 6] << 8) | pkt[ihl + 7];
+	return 1;
+}
+
 static uint16_t
 checksum_fold(uint32_t sum)
 {
@@ -1574,13 +1614,35 @@ tunnel_dns(int tun_fd, int dns_fd)
 		memcpy(&inpkt.data[inpkt.len], &buf[2], datalen);
 		inpkt.len += datalen;
 
-		if (buf[1] & 1) { /* If last fragment flag is set */
-			/* Uncompress packet and send to tun */
-			/* RE-USES buf[] */
-			datalen = sizeof(buf);
+ 		if (buf[1] & 1) { /* If last fragment flag is set */
+ 			/* Uncompress packet and send to tun */
+ 			/* RE-USES buf[] */
+ 			datalen = sizeof(buf);
+			client_debugf("Tunnel downstream packet complete: seq=%d frag=%d comp_len=%d last_read=%d",
+				      inpkt.seqno, inpkt.fragment, inpkt.len, read);
+#ifdef ANDROID
+			if (inpkt.len >= 8) {
+				const unsigned char *dbg = (const unsigned char *) inpkt.data;
+				client_debugf("Tunnel downstream packet prefix: %02x%02x%02x%02x%02x%02x%02x%02x",
+					      dbg[0], dbg[1], dbg[2], dbg[3],
+					      dbg[4], dbg[5], dbg[6], dbg[7]);
+			}
+#endif
 			if (uncompress((uint8_t*)buf, &datalen, (uint8_t*) inpkt.data, inpkt.len) == Z_OK) {
 #ifdef ANDROID
+				unsigned int src_a, src_b, src_c, src_d;
+				unsigned int dst_a, dst_b, dst_c, dst_d;
+				unsigned int icmp_id, icmp_seq;
 				repair_ipv4_checksums(buf, (int) datalen);
+				if (debug_extract_ipv4_icmp_echo_reply(buf, (int) datalen,
+						&src_a, &src_b, &src_c, &src_d,
+						&dst_a, &dst_b, &dst_c, &dst_d,
+						&icmp_id, &icmp_seq)) {
+					client_debugf("ICMP probe reply parsed: %u.%u.%u.%u -> %u.%u.%u.%u id=%u seq=%u len=%lu",
+						src_a, src_b, src_c, src_d,
+						dst_a, dst_b, dst_c, dst_d,
+						icmp_id, icmp_seq, datalen);
+				}
 #endif
 				debug_log_ip_packet("Tunnel downstream write", buf, (int) datalen);
 				if (write_tun(tun_fd, buf, datalen) != 0)
@@ -1589,6 +1651,20 @@ tunnel_dns(int tun_fd, int dns_fd)
 				else
 					client_debugf("Tunnel downstream write ok: seq=%d frag=%d len=%lu",
 						inpkt.seqno, inpkt.fragment, datalen);
+#ifdef ANDROID
+				if (debug_extract_ipv4_icmp_echo_reply(buf, (int) datalen,
+						&src_a, &src_b, &src_c, &src_d,
+						&dst_a, &dst_b, &dst_c, &dst_d,
+						&icmp_id, &icmp_seq)) {
+					client_debugf("ICMP probe reply delivered to tun: %u.%u.%u.%u -> %u.%u.%u.%u id=%u seq=%u len=%lu",
+						src_a, src_b, src_c, src_d,
+						dst_a, dst_b, dst_c, dst_d,
+						icmp_id, icmp_seq, datalen);
+				}
+#endif
+			} else {
+				client_debugf("Tunnel downstream packet uncompress failed: seq=%d frag=%d comp_len=%d",
+					      inpkt.seqno, inpkt.fragment, inpkt.len);
 			}
 			inpkt.len = 0;
 			/* Keep .seqno and .fragment as is, so that we won't

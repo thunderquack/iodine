@@ -218,6 +218,11 @@ class MainActivity : AppCompatActivity() {
                 appendLog("ADB requested HTTP probe.")
                 runHttpProbe()
             }
+            ACTION_ADB_ICMP_PROBE -> {
+                val target = intent.getStringExtra(EXTRA_PROBE_TARGET)?.trim().orEmpty()
+                appendLog("ADB requested ICMP probe: ${if (target.isBlank()) DEFAULT_ICMP_PROBE_TARGET else target}")
+                runIcmpProbe(if (target.isBlank()) DEFAULT_ICMP_PROBE_TARGET else target)
+            }
             ACTION_ADB_EXTERNAL_PROBE -> {
                 val target = intent.getStringExtra(EXTRA_PROBE_URL)?.trim().orEmpty()
                 val probePackage = intent.getStringExtra(EXTRA_PROBE_PACKAGE)?.trim().orEmpty()
@@ -387,6 +392,37 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    private fun runIcmpProbe(target: String) {
+        status("Running ICMP probe.")
+        Thread {
+            appendLogOnUi("ICMP probe note: this runs inside the VPN app process.")
+            appendLogOnUi(buildNetworkSummary())
+
+            val activeInterface = try {
+                val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val active = manager.activeNetwork
+                manager.getLinkProperties(active)?.interfaceName
+            } catch (_: Exception) {
+                null
+            }
+
+            appendLogOnUi("ICMP probe starting: $target")
+            appendLogOnUi(runCommandProbe(listOf("/system/bin/ping", "-c", "3", "-W", "3", target), "Ping"))
+
+            if (!activeInterface.isNullOrBlank()) {
+                appendLogOnUi("ICMP probe active interface: $activeInterface")
+                appendLogOnUi(
+                    runCommandProbe(
+                        listOf("/system/bin/ping", "-I", activeInterface, "-c", "3", "-W", "3", target),
+                        "Ping[$activeInterface]"
+                    )
+                )
+            }
+
+            runOnUiThread { status("ICMP probe finished.") }
+        }.start()
+    }
+
     private fun launchExternalProbe(target: String, packageName: String? = null) {
         try {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(target)).apply {
@@ -512,9 +548,11 @@ class MainActivity : AppCompatActivity() {
         const val ACTION_ADB_CONNECT = "se.kryo.iodine.action.ADB_CONNECT"
         const val ACTION_ADB_DISCONNECT = "se.kryo.iodine.action.ADB_DISCONNECT"
         const val ACTION_ADB_HTTP_PROBE = "se.kryo.iodine.action.ADB_HTTP_PROBE"
+        const val ACTION_ADB_ICMP_PROBE = "se.kryo.iodine.action.ADB_ICMP_PROBE"
         const val ACTION_ADB_EXTERNAL_PROBE = "se.kryo.iodine.action.ADB_EXTERNAL_PROBE"
         const val EXTRA_PROBE_URL = "probe_url"
         const val EXTRA_PROBE_PACKAGE = "probe_package"
+        const val EXTRA_PROBE_TARGET = "probe_target"
         private const val PREFS_NAME = "iodine_prefs"
         private const val KEY_USE_DOH = "use_doh"
         private const val KEY_SERVER = "server"
@@ -523,6 +561,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_PASSWORD = "password"
         private const val KEY_OPTIONS = "options"
         private const val DEFAULT_OPTIONS = "-f -r -T CNAME -O Base32 -L 0 -m 200 -M 200"
+        private const val DEFAULT_ICMP_PROBE_TARGET = "1.1.1.1"
         private const val DEFAULT_EXTERNAL_PROBE_URL = "http://neverssl.com"
     }
 }

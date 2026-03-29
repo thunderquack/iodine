@@ -700,6 +700,61 @@ static int send_chunk_or_dataless(int dns_fd, int userid, struct query *q)
 	return 0;	/* don't call us again */
 }
 
+static int
+debug_extract_ipv4_icmp(const char *buf, int len,
+			unsigned int *src_a, unsigned int *src_b, unsigned int *src_c, unsigned int *src_d,
+			unsigned int *dst_a, unsigned int *dst_b, unsigned int *dst_c, unsigned int *dst_d,
+			unsigned int *icmp_type, unsigned int *icmp_code,
+			unsigned int *icmp_id, unsigned int *icmp_seq)
+{
+	const unsigned char *pkt = (const unsigned char *) buf;
+	unsigned int ihl;
+
+	if (len < 20)
+		return 0;
+	if ((pkt[0] >> 4) != 4)
+		return 0;
+
+	ihl = (pkt[0] & 0x0f) * 4;
+	if (ihl < 20 || len < (int) (ihl + 8))
+		return 0;
+	if (pkt[9] != 1)
+		return 0;
+
+	*src_a = pkt[12];
+	*src_b = pkt[13];
+	*src_c = pkt[14];
+	*src_d = pkt[15];
+	*dst_a = pkt[16];
+	*dst_b = pkt[17];
+	*dst_c = pkt[18];
+	*dst_d = pkt[19];
+	*icmp_type = pkt[ihl + 0];
+	*icmp_code = pkt[ihl + 1];
+	*icmp_id = ((unsigned int) pkt[ihl + 4] << 8) | pkt[ihl + 5];
+	*icmp_seq = ((unsigned int) pkt[ihl + 6] << 8) | pkt[ihl + 7];
+	return 1;
+}
+
+static void
+debug_log_server_icmp_packet(const char *prefix, const char *buf, int len, int userid)
+{
+	unsigned int src_a, src_b, src_c, src_d;
+	unsigned int dst_a, dst_b, dst_c, dst_d;
+	unsigned int icmp_type, icmp_code, icmp_id, icmp_seq;
+
+	if (!debug_extract_ipv4_icmp(buf, len,
+			&src_a, &src_b, &src_c, &src_d,
+			&dst_a, &dst_b, &dst_c, &dst_d,
+			&icmp_type, &icmp_code, &icmp_id, &icmp_seq))
+		return;
+
+	debug_log_stderr("%s: type=%u code=%u id=%u seq=%u %u.%u.%u.%u -> %u.%u.%u.%u len=%d user=%d\n",
+		prefix, icmp_type, icmp_code, icmp_id, icmp_seq,
+		src_a, src_b, src_c, src_d,
+		dst_a, dst_b, dst_c, dst_d, len, userid);
+}
+
 static int tunnel_tun(int tun_fd, struct dnsfd *dns_fds)
 {
 	unsigned long outlen;
@@ -718,6 +773,9 @@ static int tunnel_tun(int tun_fd, struct dnsfd *dns_fds)
 	if (userid < 0)
 		return 0;
 
+	if (debug >= 1)
+		debug_log_server_icmp_packet("SRV tun read", in + 4, read - 4, userid);
+
 	outlen = sizeof(out);
 	compress2((uint8_t*)out, &outlen, (uint8_t*)in, read, 9);
 
@@ -727,12 +785,16 @@ static int tunnel_tun(int tun_fd, struct dnsfd *dns_fds)
 		   If the queue is full, drop the packet. TCP will hopefully notice
 		   and reduce the packet rate. */
 		if (users[userid].outpacket.len > 0) {
+			if (debug >= 1)
+				debug_log_server_icmp_packet("SRV tun queue", in + 4, read - 4, userid);
 			save_to_outpacketq(userid, out, outlen);
 			return 0;
 		}
 #endif
 
 		start_new_outpacket(userid, out, outlen);
+		if (debug >= 1)
+			debug_log_server_icmp_packet("SRV outpacket start", in + 4, read - 4, userid);
 
 		/* Start sending immediately if query is waiting */
 		if (users[userid].q_sendrealsoon.id != 0) {
